@@ -32,9 +32,10 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from threading import Lock, Timer
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +146,16 @@ class Model_Buffer(ABC):
             # Force garbage collection
             gc.collect()
 
-            # Clear CUDA cache if available
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logger.info("CUDA cache cleared")
+            # Clear CUDA cache if available (lazy import torch)
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logger.info("CUDA cache cleared")
+            except ImportError:
+                # torch not available, skip CUDA cache clearing
+                pass
 
     def reset_timer(self, timeout: int | None = None) -> None:
         """
