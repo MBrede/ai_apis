@@ -4,12 +4,9 @@ Pytest configuration and fixtures for the AI APIs test suite.
 This module provides common fixtures and configuration for all tests.
 """
 
-import os
-from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture(scope="function")

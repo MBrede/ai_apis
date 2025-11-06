@@ -32,7 +32,7 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from threading import Lock, Timer
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
@@ -64,13 +64,13 @@ class Model_Buffer(ABC):
 
     def __init__(self) -> None:
         """Initialize the model buffer with None values for all attributes."""
-        self.timer: Optional[Timer] = None
+        self.timer: Timer | None = None
         self.model: Any = None
         self.pipeline: Any = None
         self.tokenizer: Any = None
         self.timeout: int = -1
-        self.loaded_at: Optional[datetime] = None
-        self.last_accessed: Optional[datetime] = None
+        self.loaded_at: datetime | None = None
+        self.last_accessed: datetime | None = None
         self._lock = Lock()
         logger.info(f"{self.__class__.__name__} initialized")
 
@@ -150,7 +150,7 @@ class Model_Buffer(ABC):
                 torch.cuda.empty_cache()
                 logger.info("CUDA cache cleared")
 
-    def reset_timer(self, timeout: Optional[int] = None) -> None:
+    def reset_timer(self, timeout: int | None = None) -> None:
         """
         Reset the unload timer to prevent premature model unloading.
 

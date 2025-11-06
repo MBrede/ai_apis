@@ -4,14 +4,16 @@ Tests for the text classification API.
 Tests API endpoints, model loading, and prediction functionality.
 """
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 # Skip these tests if the required packages aren't installed
-pytest.importorskip("fastapi")
-pytest.importorskip("torch")
+torch = pytest.importorskip("torch")
+fastapi = pytest.importorskip("fastapi")
 pytest.importorskip("transformers")
+
+from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture
@@ -119,7 +121,6 @@ class TestClassificationBuffer:
         # First load
         buffer.load_model("test/model", timeout=300)
         first_model = buffer.model
-        first_loaded_at = buffer.loaded_at
 
         # Second load of same model
         buffer.load_model("test/model", timeout=600)

@@ -10,10 +10,9 @@ import subprocess
 import tempfile
 from datetime import datetime
 
-import numpy as np
 import torch
 import whisper
-from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
 from pyannote.audio import Pipeline
 
 from src.core.auth import verify_api_key
@@ -127,7 +126,7 @@ def diarize_audio(
     """Helper function to diarize audio and transcribe each speaker segment."""
     with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
         mono = tmp.name
-        cmd = 'ffmpeg -i "{}" -y -ac 1 {}'.format(file, mono)
+        cmd = f'ffmpeg -i "{file}" -y -ac 1 {mono}'
         subprocess.check_output(cmd, shell=True)
 
         # Use diarization buffer
@@ -139,7 +138,7 @@ def diarize_audio(
         with open("audio.rttm", "w") as rttm:
             diarization.write_rttm(rttm)
 
-    with open("audio.rttm", "r") as f:
+    with open("audio.rttm") as f:
         lines = f.readlines()
 
     out = []

@@ -6,7 +6,6 @@ Used by authentication system and bot for persistent storage.
 """
 
 import logging
-from typing import Optional
 
 from pymongo.database import Database
 
@@ -17,7 +16,7 @@ _mongo_client = None
 _mongo_db = None
 
 
-def get_mongo_db() -> Optional[Database]:
+def get_mongo_db() -> Database | None:
     """
     Get MongoDB database connection with lazy initialization.
 

@@ -4,10 +4,7 @@ Tests for the configuration module.
 Tests configuration loading, validation, and environment variable handling.
 """
 
-import os
 from pathlib import Path
-
-import pytest
 
 from src.core.config import APIConfig
 

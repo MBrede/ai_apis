@@ -3,11 +3,10 @@ gunicorn llm_wrapper:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:80
 """
 
 import json
-import os
 
 import requests
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from requests.exceptions import ConnectionError, Timeout
 
 
@@ -34,7 +33,7 @@ class JSON_request(BaseModel):
     API: str = "mistral7b"
 
 
-with open("available_endpoints.json", "r") as f:
+with open("available_endpoints.json") as f:
     available_endpoints = json.load(f)
 
 
@@ -103,7 +102,7 @@ router = APIRouter()
 @router.get("/list_available_llms")
 async def list_available_llms():
     global available_endpoints
-    with open("available_endpoints.json", "r") as f:
+    with open("available_endpoints.json") as f:
         available_endpoints = json.load(f)
     out = {"LLM": {}, "Image Generation": available_endpoints["Image Generation"]}
     for item, content in zip(
@@ -121,7 +120,7 @@ async def list_available_llms():
 
 @router.post("/register_llm")
 async def register_llm(llm: LLM):
-    with open("available_endpoints.json", "r") as f:
+    with open("available_endpoints.json") as f:
         available_endpoints = json.load(f)
     available_endpoints["LLM"][llm.name] = llm.dict()
     with open("available_endpoints.json", "w") as f:

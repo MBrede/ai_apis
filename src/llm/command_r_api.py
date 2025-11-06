@@ -79,7 +79,7 @@ class Item(BaseModel):
 
 @router.post("/answer/")
 def get_answer(item: Item):
-    prompt = "{}\n\n{}".format(item.system, item.messages)
+    prompt = f"{item.system}\n\n{item.messages}"
     return {
         "message": llm.generate_naked(
             prompt=prompt, temp=item.temperature, max_new_tokens=item.max_tokens

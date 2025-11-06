@@ -5,7 +5,6 @@ This module provides FastAPI-compatible authentication dependencies.
 Separated from core auth to avoid requiring FastAPI for non-API uses.
 """
 
-from typing import Optional
 
 from src.core.auth import _verify_admin_key_impl, _verify_api_key_impl, get_api_key_header
 
@@ -19,7 +18,7 @@ def create_api_key_dependency():
     """
     from fastapi import Security
 
-    async def verify_key(api_key: Optional[str] = Security(get_api_key_header())) -> str:
+    async def verify_key(api_key: str | None = Security(get_api_key_header())) -> str:
         return await _verify_api_key_impl(api_key)
 
     return verify_key
@@ -34,7 +33,7 @@ def create_admin_key_dependency():
     """
     from fastapi import Security
 
-    async def verify_admin(api_key: Optional[str] = Security(get_api_key_header())) -> str:
+    async def verify_admin(api_key: str | None = Security(get_api_key_header())) -> str:
         return await _verify_admin_key_impl(api_key)
 
     return verify_admin

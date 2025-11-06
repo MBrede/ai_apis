@@ -50,7 +50,7 @@ def data_request():
         "Generate a series of descriptions of places, people and scenes, each no longer than two sentences.",
     ]
     sample = texts[random.randint(0, len(texts))]
-    instruction = "{} Seperate the examples by an ';'.".format(sample)
+    instruction = f"{sample} Seperate the examples by an ';'."
     url = f"{config.LLM_COMMAND_R_URL}/llm_interface?temp=0.5&text={instruction}"
     response = requests.get(url)
     if not response.ok:

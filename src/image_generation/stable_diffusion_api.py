@@ -11,7 +11,6 @@ import re
 import subprocess
 from datetime import datetime
 from io import BytesIO
-from typing import Optional
 
 import numpy as np
 import requests
@@ -132,7 +131,7 @@ class DiffusionModel(Model_Buffer):
                                     "lora_path"
                                 ] = f'{file_info["downloadUrl"]}?type=SafeTensor'
                             if "trainedWords" in info["modelVersions"][0]:
-                                updated_info[info["name"]]["trigger words"]: info["modelVersions"][
+                                updated_info[info["name"]]["trigger words"] = info["modelVersions"][
                                     0
                                 ]["trainedWords"]
                         else:
@@ -151,7 +150,7 @@ class DiffusionModel(Model_Buffer):
 
     def load_implemented_loras(self):
         global sd_paths
-        with open("lora_list.json", "r") as f:
+        with open("lora_list.json") as f:
             self.implemeted_loras = json.load(f)
         self._update_lora_info()
         self.prep_lora()

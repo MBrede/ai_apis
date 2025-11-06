@@ -1,10 +1,8 @@
-import os
 from datetime import datetime
-from typing import List
 
 import torch
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI
 from huggingface_hub import hf_api
 from setfit import SetFitModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -54,7 +52,7 @@ class ClassificationBuffer(Model_Buffer):
         if self.timer:
             self.timer.start()
 
-    def predict_proba(self, texts: List[str]) -> List[dict]:
+    def predict_proba(self, texts: list[str]) -> list[dict]:
         """Predict class probabilities for input texts."""
         if not self.is_loaded():
             raise RuntimeError("Model not loaded. Call load_model() first.")
@@ -101,7 +99,7 @@ from core.auth import verify_api_key
 
 
 class Text_Request(BaseModel):
-    text: List[str]
+    text: list[str]
     model: str | None = "oliverguhr/german-sentiment-bert"
 
 

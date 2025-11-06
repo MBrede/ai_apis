@@ -7,14 +7,13 @@ Supports multiple API keys (comma-separated in environment variables).
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional, Set
+from typing import TYPE_CHECKING
 
 from src.core.config import config
 from src.core.database import get_mongo_db
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException, Security, status
-    from fastapi.security import APIKeyHeader
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +71,7 @@ def __getattr__(name):
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
-def _parse_api_keys(key_string: Optional[str]) -> Set[str]:
+def _parse_api_keys(key_string: str | None) -> set[str]:
     """
     Parse comma-separated API keys from environment variable.
 
@@ -87,7 +86,7 @@ def _parse_api_keys(key_string: Optional[str]) -> Set[str]:
     return {key.strip() for key in key_string.split(",") if key.strip()}
 
 
-async def verify_api_key_mongodb(api_key: str) -> Optional[dict]:
+async def verify_api_key_mongodb(api_key: str) -> dict | None:
     """
     Verify API key against MongoDB.
 
@@ -110,7 +109,7 @@ async def verify_api_key_mongodb(api_key: str) -> Optional[dict]:
         return None
 
 
-async def _verify_api_key_impl(api_key: Optional[str]) -> str:
+async def _verify_api_key_impl(api_key: str | None) -> str:
     """
     Internal implementation of API key verification.
 
@@ -147,7 +146,7 @@ async def _verify_api_key_impl(api_key: Optional[str]) -> str:
     # Fallback to environment variable authentication (supports multiple keys)
     valid_keys = _parse_api_keys(config.API_KEY)
     if valid_keys and api_key in valid_keys:
-        logger.info(f"API key verified via environment variables")
+        logger.info("API key verified via environment variables")
         return api_key
 
     raise HTTPException(
@@ -156,7 +155,7 @@ async def _verify_api_key_impl(api_key: Optional[str]) -> str:
     )
 
 
-async def verify_api_key(api_key: Optional[str] = None) -> str:
+async def verify_api_key(api_key: str | None = None) -> str:
     """
     FastAPI dependency for API key verification.
 
@@ -184,7 +183,7 @@ async def verify_api_key(api_key: Optional[str] = None) -> str:
     # If called directly for testing, we can handle None
     if api_key is None:
         try:
-            from fastapi import Security
+            from fastapi import Security  # noqa: F401
 
             # This branch is for when used as a dependency
             return await _verify_api_key_impl(api_key)
@@ -194,7 +193,7 @@ async def verify_api_key(api_key: Optional[str] = None) -> str:
     return await _verify_api_key_impl(api_key)
 
 
-async def _verify_admin_key_impl(api_key: Optional[str]) -> str:
+async def _verify_admin_key_impl(api_key: str | None) -> str:
     """
     Internal implementation of admin API key verification.
 
@@ -237,7 +236,7 @@ async def _verify_admin_key_impl(api_key: Optional[str]) -> str:
         )
 
     if api_key in valid_admin_keys:
-        logger.info(f"Admin key verified via environment variables")
+        logger.info("Admin key verified via environment variables")
         return api_key
 
     raise HTTPException(
@@ -246,7 +245,7 @@ async def _verify_admin_key_impl(api_key: Optional[str]) -> str:
     )
 
 
-async def verify_admin_key(api_key: Optional[str] = None) -> str:
+async def verify_admin_key(api_key: str | None = None) -> str:
     """
     FastAPI dependency for admin API key verification.
 

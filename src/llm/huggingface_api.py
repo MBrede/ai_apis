@@ -13,7 +13,6 @@ from upgrading to newer versions for improved performance and capabilities.
 """
 
 import os
-from typing import Union
 
 import torch
 from dotenv import load_dotenv

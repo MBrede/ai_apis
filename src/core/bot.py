@@ -9,7 +9,6 @@ Supports MongoDB for persistent user settings storage.
 import datetime
 import json
 import logging
-import os
 import tempfile
 from io import BytesIO
 
@@ -129,13 +128,13 @@ if config.USE_MONGODB:
 else:
     logger.info("MongoDB disabled, using JSON files...")
     try:
-        with open("users.json", "r") as f:
+        with open("users.json") as f:
             USERS = json.load(f)
     except FileNotFoundError:
         USERS = {}
 
     try:
-        with open("contacts.json", "r") as f:
+        with open("contacts.json") as f:
             CONTACTS = json.load(f)
     except FileNotFoundError:
         CONTACTS = {}

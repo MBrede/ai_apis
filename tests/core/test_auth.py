@@ -4,7 +4,7 @@ Tests for the authentication module.
 Tests API key verification, admin key verification, and MongoDB integration.
 """
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import HTTPException

@@ -7,9 +7,7 @@ and thread safety.
 
 import time
 from datetime import datetime
-from unittest.mock import MagicMock, Mock, patch
-
-import pytest
+from unittest.mock import Mock, patch
 
 from src.core.buffer_class import Model_Buffer
 
@@ -114,7 +112,6 @@ class TestModelBufferLoading:
         # First load
         buffer.load_model("test-model", timeout=300)
         first_timer = buffer.timer
-        first_loaded_at = buffer.loaded_at
 
         # Second load
         time.sleep(0.1)
@@ -393,7 +390,8 @@ class TestModelBufferCleanup:
         buffer = ConcreteModelBuffer()
         buffer.load_model("test-model", timeout=300)
 
-        timer = buffer.timer
+        # Store timer reference to verify it gets cleaned up
+        _timer = buffer.timer
 
         # Delete buffer
         del buffer

@@ -9,7 +9,6 @@ Load settings from environment variables when available.
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -56,13 +55,13 @@ class APIConfig:
     # =============================================================================
 
     # API Key for authentication (IMPORTANT: Set in .env file!)
-    API_KEY: Optional[str] = os.getenv("API_KEY")
+    API_KEY: str | None = os.getenv("API_KEY")
 
     # Require authentication (set to False for development only)
     REQUIRE_AUTH: bool = os.getenv("REQUIRE_AUTH", "True").lower() == "true"
 
     # Admin API key for privileged operations
-    ADMIN_API_KEY: Optional[str] = os.getenv("ADMIN_API_KEY")
+    ADMIN_API_KEY: str | None = os.getenv("ADMIN_API_KEY")
 
     # =============================================================================
     # MongoDB Configuration
@@ -82,13 +81,13 @@ class APIConfig:
     # =============================================================================
 
     # HuggingFace token
-    HF_TOKEN: Optional[str] = os.getenv("hf_token") or os.getenv("HF_TOKEN")
+    HF_TOKEN: str | None = os.getenv("hf_token") or os.getenv("HF_TOKEN")
 
     # Civitai API key (for LORA downloads)
-    CIVIT_KEY: Optional[str] = os.getenv("civit_key") or os.getenv("CIVIT_KEY")
+    CIVIT_KEY: str | None = os.getenv("civit_key") or os.getenv("CIVIT_KEY")
 
     # Telegram bot token
-    TELEGRAM_TOKEN: Optional[str] = os.getenv("telegram_token") or os.getenv("TELEGRAM_TOKEN")
+    TELEGRAM_TOKEN: str | None = os.getenv("telegram_token") or os.getenv("TELEGRAM_TOKEN")
 
     # =============================================================================
     # File Paths
