@@ -1,5 +1,5 @@
 # Base image with CUDA support for GPU acceleration
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
