@@ -54,12 +54,49 @@ The LLM APIs in `src/llm/` use **older model versions** and are kept for **backw
 
 ## 🚀 Installation
 
-### Prerequisites
+### 🐳 Docker Deployment (Recommended)
+
+The easiest way to run all APIs with GPU support and MongoDB:
+
+```bash
+# 1. Clone and configure
+git clone https://github.com/yourusername/ai_apis
+cd ai_apis
+cp .env.example .env
+nano .env  # Set API_KEY, HF_TOKEN, etc.
+
+# 2. Start all services
+docker-compose up -d
+
+# 3. Initialize MongoDB
+docker-compose exec stable_diffusion python scripts/init_mongodb.py
+
+# 4. Test
+curl -H "X-API-Key: your-api-key" http://localhost:1234/get_available_stable_diffs
+```
+
+**✨ Features:**
+- 🎯 GPU acceleration for all ML models
+- 🗄️ MongoDB for authentication & settings
+- 🔄 Automatic model unloading (GPU memory management)
+- 📦 Isolated services with Docker Compose
+- 🔐 Secure API key authentication
+
+**📚 Full documentation:** See [DOCKER.md](DOCKER.md) for detailed Docker setup, troubleshooting, and production deployment.
+
+---
+
+### 🐍 Manual Installation
+
+For development or custom setups:
+
+#### Prerequisites
 - Python 3.13+
 - CUDA 12.1+ (for GPU support)
 - FFmpeg (for audio processing)
+- MongoDB 7.0+ (optional, for authentication)
 
-### Setup
+#### Setup
 
 ```bash
 # Clone the repository

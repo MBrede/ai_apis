@@ -60,6 +60,22 @@ class APIConfig:
     ADMIN_API_KEY: Optional[str] = os.getenv("ADMIN_API_KEY")
 
     # =============================================================================
+    # MongoDB Configuration
+    # =============================================================================
+
+    # Use MongoDB for authentication and bot settings
+    USE_MONGODB: bool = os.getenv("USE_MONGODB", "False").lower() == "true"
+
+    # MongoDB connection URL
+    MONGODB_URL: str = os.getenv(
+        "MONGODB_URL",
+        "mongodb://localhost:27017/"
+    )
+
+    # MongoDB database name
+    MONGODB_DB: str = os.getenv("MONGODB_DB", "ai_apis")
+
+    # =============================================================================
     # External Service Tokens
     # =============================================================================
 
@@ -171,6 +187,10 @@ class APIConfig:
         print(f"API Key: {'✓ Set' if cls.API_KEY else '✗ Not Set'}")
         print(f"HF Token: {'✓ Set' if cls.HF_TOKEN else '✗ Not Set'}")
         print(f"Telegram Token: {'✓ Set' if cls.TELEGRAM_TOKEN else '✗ Not Set'}")
+        print(f"MongoDB: {'Enabled' if cls.USE_MONGODB else 'Disabled'}")
+        if cls.USE_MONGODB:
+            print(f"MongoDB URL: {cls.MONGODB_URL}")
+            print(f"MongoDB DB: {cls.MONGODB_DB}")
         print("=" * 70)
 
         warnings = cls.validate()
