@@ -5,13 +5,10 @@ This shows how to integrate the buffer class into stable_diffusion_api.py for
 automatic model unloading after inactivity.
 """
 
-import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 import torch
 from diffusers import StableDiffusionPipeline
-from core.buffer_class import Model_Buffer
+from src.core.buffer_class import Model_Buffer
 from datetime import datetime
 import logging
 

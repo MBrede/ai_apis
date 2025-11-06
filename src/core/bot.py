@@ -14,13 +14,9 @@ import datetime
 import requests
 from io import BytesIO
 import tempfile
-import sys
 import logging
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from core.config import config
-from core.database import get_mongo_db
+from src.core.config import config
+from src.core.database import get_mongo_db
 
 logger = logging.getLogger(__name__)
 

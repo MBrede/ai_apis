@@ -5,11 +5,7 @@ from io import BytesIO
 from numpy import random
 from tqdm import tqdm
 import json
-import sys
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from core.config import config
+from src.core.config import config
 
 
 def api_request(image_path: str = None,

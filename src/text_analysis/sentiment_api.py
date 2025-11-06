@@ -1,15 +1,12 @@
-import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from typing import List
 from datetime import datetime
 
-from core.buffer_class import Model_Buffer
-from core.config import config
+from src.core.buffer_class import Model_Buffer
+from src.core.config import config
 
 
 class SentimentBuffer(Model_Buffer):

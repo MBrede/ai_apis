@@ -5,10 +5,7 @@ To start the API:
     gunicorn stable_diffusion_api:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:1234
 """
 
-import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 import torch
 from diffusers import (StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, DiffusionPipeline,
                        StableDiffusionXLPipeline,StableDiffusionXLImg2ImgPipeline, EulerDiscreteScheduler)
@@ -26,9 +23,9 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from core.config import config
-from core.auth import verify_api_key, verify_admin_key
-from core.buffer_class import Model_Buffer
+from src.core.config import config
+from src.core.auth import verify_api_key, verify_admin_key
+from src.core.buffer_class import Model_Buffer
 
 sd_paths = {
     'SD 1.5': "runwayml/stable-diffusion-v1-5",

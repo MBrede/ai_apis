@@ -1,7 +1,4 @@
-import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from huggingface_hub import hf_api
@@ -11,8 +8,8 @@ from dotenv import load_dotenv
 from setfit import SetFitModel
 from datetime import datetime
 
-from core.buffer_class import Model_Buffer
-from core.config import config
+from src.core.buffer_class import Model_Buffer
+from src.core.config import config
 
 load_dotenv(".env")
 

@@ -4,10 +4,7 @@ Whisper Audio Transcription API with speaker diarization.
 To start:
     gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
-import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 import subprocess
 import numpy as np
 import tempfile
@@ -18,9 +15,9 @@ import whisper
 from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends
 from pyannote.audio import Pipeline
 
-from core.config import config
-from core.auth import verify_api_key
-from core.buffer_class import Model_Buffer
+from src.core.config import config
+from src.core.auth import verify_api_key
+from src.core.buffer_class import Model_Buffer
 
 
 class WhisperBuffer(Model_Buffer):

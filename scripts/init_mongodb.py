@@ -9,13 +9,8 @@ Usage:
     python scripts/init_mongodb.py
 """
 
-import sys
 import os
 from datetime import datetime
-
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
