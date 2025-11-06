@@ -7,9 +7,13 @@ Tests API key verification, admin key verification, and MongoDB integration.
 from unittest.mock import Mock, patch
 
 import pytest
-from fastapi import HTTPException
 
-from src.core import auth
+# Skip all tests in this module if fastapi isn't available
+pytest.importorskip("fastapi")
+
+from fastapi import HTTPException  # noqa: E402
+
+from src.core import auth  # noqa: E402
 
 
 class TestParseAPIKeys:
