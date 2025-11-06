@@ -3,19 +3,35 @@ Authentication utilities for API security.
 
 Provides API key-based authentication for FastAPI endpoints.
 Supports both environment variable and MongoDB-based authentication.
+Supports multiple API keys (comma-separated in environment variables).
 """
 
-from typing import Optional
+from typing import Optional, Set
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader
-from core.config import config
-from core.database import get_mongo_db
+from src.core.config import config
+from src.core.database import get_mongo_db
 import logging
 
 logger = logging.getLogger(__name__)
 
 # API Key header security scheme
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def _parse_api_keys(key_string: Optional[str]) -> Set[str]:
+    """
+    Parse comma-separated API keys from environment variable.
+
+    Args:
+        key_string: Comma-separated list of API keys or single key
+
+    Returns:
+        Set of API keys (empty if None)
+    """
+    if not key_string:
+        return set()
+    return {key.strip() for key in key_string.split(',') if key.strip()}
 
 
 async def verify_api_key_mongodb(api_key: str) -> Optional[dict]:
@@ -75,16 +91,16 @@ async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> s
             logger.info(f"API key verified via MongoDB: {key_doc.get('name', 'Unknown')}")
             return api_key
 
-    # Fallback to environment variable authentication
-    if config.API_KEY and api_key == config.API_KEY:
+    # Fallback to environment variable authentication (supports multiple keys)
+    valid_keys = _parse_api_keys(config.API_KEY)
+    if valid_keys and api_key in valid_keys:
+        logger.info(f"API key verified via environment variables")
         return api_key
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Invalid API key",
     )
-
-    return api_key
 
 
 async def verify_admin_key(api_key: Optional[str] = Security(api_key_header)) -> str:
@@ -121,22 +137,22 @@ async def verify_admin_key(api_key: Optional[str] = Security(api_key_header)) ->
             logger.info(f"Admin key verified via MongoDB: {key_doc.get('name', 'Unknown')}")
             return api_key
 
-    # Fallback to environment variable authentication
-    if not config.ADMIN_API_KEY:
+    # Fallback to environment variable authentication (supports multiple keys)
+    valid_admin_keys = _parse_api_keys(config.ADMIN_API_KEY)
+    if not valid_admin_keys:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Admin API key not configured on server",
         )
 
-    if api_key == config.ADMIN_API_KEY:
+    if api_key in valid_admin_keys:
+        logger.info(f"Admin key verified via environment variables")
         return api_key
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Invalid admin API key. Admin access required.",
     )
-
-    return api_key
 
 
 def get_auth_status() -> dict:

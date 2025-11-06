@@ -88,50 +88,13 @@ services:
       mongodb:
         condition: service_healthy
 
-  # Sentiment Analysis API
-  sentiment:
-    build:
-      context: .
-      dockerfile: Dockerfile.text_analysis
-    container_name: ai_apis_sentiment
-    restart: unless-stopped
-    command: ["gunicorn", "src.text_analysis.sentiment_api:app",
-              "--workers", "1",
-              "--worker-class", "uvicorn.workers.UvicornWorker",
-              "--bind", "0.0.0.0:8001"]
-    environment:
-      - API_KEY=${API_KEY:-your-api-key-here}
-      - USE_MONGODB=${USE_MONGODB:-true}
-      - MONGODB_URL=mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/
-      - MONGODB_DB=ai_apis
-    volumes:
-      - sentiment_cache:/root/.cache
-    ports:
-      - "8001:8001"
-    networks:
-      - ai_apis_network
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    depends_on:
-      mongodb:
-        condition: service_healthy
-
-  # Text Classification API
+  # Text Classification API (includes sentiment analysis)
   text_classification:
     build:
       context: .
       dockerfile: Dockerfile.text_analysis
     container_name: ai_apis_text_classification
     restart: unless-stopped
-    command: ["gunicorn", "src.text_analysis.text_classification_api:app",
-              "--workers", "1",
-              "--worker-class", "uvicorn.workers.UvicornWorker",
-              "--bind", "0.0.0.0:8002"]
     environment:
       - API_KEY=${API_KEY:-your-api-key-here}
       - USE_MONGODB=${USE_MONGODB:-true}
@@ -140,7 +103,7 @@ services:
     volumes:
       - classifier_cache:/root/.cache
     ports:
-      - "8002:8002"
+      - "8000:8000"
     networks:
       - ai_apis_network
     deploy:
@@ -191,8 +154,6 @@ volumes:
   sd_cache:
     driver: local
   whisper_cache:
-    driver: local
-  sentiment_cache:
     driver: local
   classifier_cache:
     driver: local

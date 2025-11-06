@@ -1,5 +1,5 @@
 # Stable Diffusion API Docker image
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -8,20 +8,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
+    python3.12 \
+    python3.12-dev \
     python3-pip \
     git \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
 WORKDIR /app
 
 # Copy and install dependencies
 COPY pyproject.toml /app/
-RUN pip install --upgrade pip && pip install -e /app
+RUN pip install --upgrade pip && pip install -e "/app[stable-diffusion]"
 
 # Copy source code
 COPY src/core/ /app/src/core/

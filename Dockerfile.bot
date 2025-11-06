@@ -1,5 +1,5 @@
 # Telegram Bot Docker image
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -17,7 +17,7 @@ WORKDIR /app
 
 # Copy and install dependencies
 COPY pyproject.toml /app/
-RUN pip install --upgrade pip && pip install -e /app
+RUN pip install --upgrade pip && pip install -e "/app[bot]"
 
 # Copy source code
 COPY src/core/ /app/src/core/
