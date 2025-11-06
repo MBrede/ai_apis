@@ -12,7 +12,7 @@ from setfit import SetFitModel
 from datetime import datetime
 
 from core.buffer_class import Model_Buffer
-from config import config
+from core.config import config
 
 load_dotenv(".env")
 
@@ -97,7 +97,7 @@ app = FastAPI()
 router = APIRouter()
 
 from pydantic import BaseModel
-from auth import verify_api_key
+from core.auth import verify_api_key
 from fastapi import Depends
 
 

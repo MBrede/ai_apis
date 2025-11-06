@@ -1,20 +1,27 @@
-# SD API - Comprehensive AI APIs Collection
+# AI APIs Collection
 
-A collection of FastAPI-based microservices for running various AI models including LLMs, Stable Diffusion, audio transcription, and text analysis.
+A comprehensive collection of FastAPI-based microservices for running various AI models including LLMs, Stable Diffusion, audio transcription, and text analysis. Features automatic GPU memory management with configurable model unloading.
 
 ## 📁 Project Structure
 
 ```
-sd_api/
+ai_apis/
 ├── src/
-│   ├── core/          # Core utilities and Telegram bot
-│   ├── llm/           # Large Language Model APIs (⚠️ older models)
-│   ├── image_generation/  # Stable Diffusion and image generation
-│   ├── audio/         # Audio transcription with Whisper
-│   ├── text_analysis/ # Sentiment and text classification
-│   └── training/      # Model fine-tuning scripts
-├── pyproject.toml     # Project dependencies (Python 3.13+)
-├── README.md          # This file
+│   ├── core/               # Core utilities and shared infrastructure
+│   │   ├── auth.py         # 🔐 API key authentication
+│   │   ├── config.py       # ⚙️ Centralized configuration
+│   │   ├── buffer_class.py # 🧠 Auto GPU memory management
+│   │   ├── bot.py          # 🤖 Telegram bot (uses OLLAMA)
+│   │   └── api_request.py  # HTTP client utilities
+│   ├── image_generation/   # 🎨 Stable Diffusion, UniDiffuser
+│   ├── audio/              # 🎙️ Whisper transcription + diarization
+│   ├── text_analysis/      # 📝 Sentiment & classification
+│   ├── llm/                # 💬 Legacy LLM APIs (backward compat)
+│   ├── training/           # 🏋️ Model fine-tuning (Unsloth)
+│   └── examples/           # Buffer integration examples
+├── pyproject.toml          # Python 3.13+ dependencies
+├── .env.example            # Configuration template
+├── README.md               # This file
 └── automated_cuda_install.yml
 ```
 
@@ -34,13 +41,16 @@ The LLM APIs in `src/llm/` use **older model versions** and are kept for **backw
 **Modern LLM access:** Use OLLAMA endpoint for current models.
 
 ### Recent Changes ✅
-1. ✅ **Authentication added** - All APIs now require API key
-2. ✅ **Centralized configuration** - All IPs/ports in `config.py`
-3. ✅ **Bot uses OLLAMA** - Switched from legacy LLM APIs
-4. ✅ **Fixed bugs**:
-   - `buffer_class.py`: Added missing `import gc`
-   - `huggingface_api.py`: Fixed typo `item.message` → `item.messages`
-5. ✅ **Removed idefics_api** - Had incomplete code
+1. ✅ **Project restructured** - Removed confusing `sd_api/` folder, cleaner hierarchy
+2. ✅ **GPU memory management** - All APIs use Model_Buffer for automatic unloading
+3. ✅ **Authentication added** - All APIs now require API key
+4. ✅ **Centralized configuration** - All IPs/ports in `core/config.py`
+5. ✅ **Bot uses OLLAMA** - Switched from legacy LLM APIs
+6. ✅ **Fixed bugs** & removed outdated code:
+   - Deleted duplicate `whisper/` folder
+   - Fixed `buffer_class.py`: Added missing `import gc`
+   - Fixed `huggingface_api.py`: Typo `item.message` → `item.messages`
+   - Removed incomplete `idefics_api`
 
 ## 🚀 Installation
 
@@ -53,7 +63,7 @@ The LLM APIs in `src/llm/` use **older model versions** and are kept for **backw
 
 ```bash
 # Clone the repository
-cd sd_api
+cd ai_apis
 
 # Install dependencies
 pip install -e .
@@ -101,9 +111,18 @@ response = requests.get("http://localhost:1234/get_available_stable_diffs", head
 ### Core (`src/core/`)
 - **config.py** - 🆕 Centralized configuration management
 - **auth.py** - 🆕 API key authentication
+- **buffer_class.py** - 🆕 Abstract base class for automatic GPU memory management
 - **bot.py** - Telegram bot (now uses OLLAMA for LLM)
 - **api_request.py** - Client utilities for making API requests
-- **buffer_class.py** - Abstract base class for model memory management
+
+**GPU Memory Management:**
+All ML APIs now use the `Model_Buffer` class for automatic model unloading:
+- ⏱️ **Configurable timeouts** per model type (SD: 10min, Whisper: 5min, Text: 5min)
+- 🔄 **Automatic timer reset** on each model access
+- 🧵 **Thread-safe** operations for concurrent requests
+- 🗑️ **Smart cleanup** with garbage collection + CUDA cache clearing
+- 📊 **Monitoring** via `/buffer_status` endpoints
+- See `src/core/BUFFER_CLASS_GUIDE.md` for integration details
 
 ### LLM (`src/llm/`) ⚠️ Legacy - For Backward Compatibility Only
 - **huggingface_api.py** - Mixtral-8x7B API (old model, port 8000)
@@ -164,6 +183,7 @@ Once an API is running, visit `http://localhost:<port>/docs` for interactive Swa
 - `POST /post_config` - Generate images from text/images
 - `GET /get_available_loras` - List available LORA models
 - `GET /get_available_stable_diffs` - List SD models
+- `GET /buffer_status` - Check model buffer status
 
 **LLM:**
 - `GET /llm_interface?text=...` - Generate text
@@ -173,6 +193,12 @@ Once an API is running, visit `http://localhost:<port>/docs` for interactive Swa
 **Whisper:**
 - `POST /transcribe/` - Transcribe audio
 - `POST /transcribe_and_diarize/` - Transcribe with speaker identification
+- `GET /buffer_status` - Check Whisper & diarization buffer status
+
+**Text Analysis:**
+- `POST /predict_sentiment/` - Analyze sentiment
+- `POST /predict_proba/` - Text classification probabilities
+- `GET /buffer_status` - Check model buffer status
 
 ## 🤖 Telegram Bot
 

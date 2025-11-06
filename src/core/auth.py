@@ -7,7 +7,7 @@ Provides API key-based authentication for FastAPI endpoints.
 from typing import Optional
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader
-from config import config
+from core.config import config
 
 # API Key header security scheme
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)

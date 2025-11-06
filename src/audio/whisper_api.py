@@ -18,8 +18,8 @@ import whisper
 from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends
 from pyannote.audio import Pipeline
 
-from config import config
-from auth import verify_api_key
+from core.config import config
+from core.auth import verify_api_key
 from core.buffer_class import Model_Buffer
 
 

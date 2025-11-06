@@ -1,15 +1,17 @@
 # Image Generation APIs
 
-High-performance image generation and multi-modal vision APIs powered by Stable Diffusion, UniDiffuser, and Idefics2.
+High-performance image generation and multi-modal vision APIs powered by Stable Diffusion and UniDiffuser. Features automatic GPU memory management with configurable timeouts.
 
 ## Files
 
-### `stable_diffusion_api.py`
+### `stable_diffusion_api.py` ✅
 **Port:** 1234
 **Models:** SD 1.5, SD 2.0/2.1, SDXL 1.0, Flux.1-dev
 **GPU:** cuda
+**Authentication:** ✅ Required (X-API-Key header)
+**Buffer Timeout:** 10 minutes (configurable)
 
-Main Stable Diffusion API with extensive LORA support and multiple model backends.
+Main Stable Diffusion API with extensive LORA support, multiple model backends, and automatic GPU memory management.
 
 #### Features:
 - Text-to-image generation
@@ -20,16 +22,20 @@ Main Stable Diffusion API with extensive LORA support and multiple model backend
 - Automatic LORA downloading and caching
 - Long prompt support (via lpw_stable_diffusion)
 - Commercial usage tracking
+- 🆕 **Automatic GPU memory management** - Models unload after 10min inactivity
+- 🆕 **API key authentication** - Secure access control
+- 🆕 **Centralized configuration** - All settings via `core/config.py`
 
 #### Endpoints:
-- `POST /post_config` - Generate images
+- `POST /post_config` - Generate images (🔐 auth required)
   - Query params: prompt, model_id, torch_dtype, num_inference_steps, etc.
   - Optional file upload for img2img
-- `GET /get_available_loras` - List all LORA models with trigger words
-- `GET /get_available_stable_diffs` - List supported SD models
-- `GET /add_new_lora?name=<name>` - Add LORA from Civitai
-- `GET /llm_prompt_assistance?text=<text>` - Get LLM help (forwarded)
-- `GET /llm_interface?text=<text>` - LLM generation (forwarded)
+- `GET /get_available_loras` - List all LORA models with trigger words (🔐 auth)
+- `GET /get_available_stable_diffs` - List supported SD models (🔐 auth)
+- `POST /add_new_lora?name=<name>` - Add LORA from Civitai (🔐 **admin** auth)
+- `GET /buffer_status` - Check model buffer status (🔐 auth)
+- `GET /llm_prompt_assistance?text=<text>` - Get LLM help (🔐 auth, forwarded to legacy API)
+- `GET /llm_interface?text=<text>` - LLM generation (🔐 auth, forwarded to legacy API)
 
 #### Start Command:
 ```bash
@@ -39,8 +45,10 @@ gunicorn stable_diffusion_api:app --workers 1 \
 ```
 
 #### Environment Variables:
-- `hf_token` - HuggingFace API token
-- `civit_key` - Civitai API key (for LORA downloads)
+- `HF_TOKEN` - HuggingFace API token (in `.env`)
+- `CIVIT_KEY` - Civitai API key for LORA downloads (in `.env`)
+- `API_KEY` - API key for authentication (in `.env`)
+- `ADMIN_API_KEY` - Admin API key for privileged operations (in `.env`)
 
 #### Configuration:
 LORA models stored in `lora_list.json`:
@@ -65,8 +73,10 @@ import requests
 from PIL import Image
 from io import BytesIO
 
+headers = {"X-API-Key": "your-api-key"}
 response = requests.post(
     "http://localhost:1234/post_config",
+    headers=headers,
     params={
         "prompt": "A serene mountain landscape, oil painting style",
         "model_id": "stabilityai/stable-diffusion-2-1",
@@ -166,52 +176,6 @@ print(f"VAE shape: {len(embeddings['vae_emb'])}")
 
 ---
 
-### `idefics_api.py`
-**Port:** 8080
-**Model:** HuggingFaceM4/idefics2-8b
-**GPU:** cuda
-
-Vision-to-sequence model for image understanding and multi-modal conversations.
-
-#### Features:
-- Image captioning and description
-- Visual question answering
-- Multi-image understanding
-- Chat-based image interaction
-
-#### Endpoints:
-- `POST /prompt2img` - (Incomplete/unused)
-- `POST /img2prompt` - Generate description from image
-- `POST /img2embed` - Extract embeddings (Incomplete)
-
-#### Start Command:
-```bash
-gunicorn idefics_api:app --workers 1 \
-    --worker-class uvicorn.workers.UvicornWorker \
-    --bind 0.0.0.0:8080
-```
-
-#### Usage Examples:
-
-**Image Description:**
-```python
-files = {'image': ('scene.jpg', open('scene.jpg', 'rb'), 'image/jpeg')}
-response = requests.post(
-    "http://localhost:8080/img2prompt",
-    files=files,
-    data={
-        "torch_dtype": "float16",
-        "num_inference_steps": 20,
-        "guidance_scale": 7.5
-    }
-)
-description = response.text
-```
-
-**⚠️ Note:** Some endpoints in idefics_api.py appear incomplete or have unused code.
-
----
-
 ## Performance Comparison
 
 | Model | Speed | Quality | VRAM | Use Case |
@@ -221,7 +185,6 @@ description = response.text
 | SDXL 1.0 | Slower | Best | 12GB | Production quality |
 | Flux.1-dev | Slow | Excellent | 24GB | State-of-the-art |
 | UniDiffuser | Medium | Good | 8GB | Multi-modal tasks |
-| Idefics2 | Fast | Good | 8GB | Image understanding |
 
 ## Hardware Requirements
 
@@ -268,12 +231,12 @@ description = response.text
 
 ## Known Issues
 
-1. **Hardcoded IPs** in stable_diffusion_api.py (lines 332, 341)
-2. **No request queuing** - concurrent requests may fail
+1. ~~**Hardcoded IPs**~~ ✅ Fixed - Now in `core/config.py`
+2. **No request queuing** - concurrent requests may cause issues
 3. **LORA downloads** can timeout on slow connections
-4. **idefics_api.py** has incomplete code and undefined references
+4. ~~**idefics_api.py incomplete**~~ ✅ Removed
 5. **No image validation** - malformed images can crash the API
-6. **Memory leaks** possible with many LORA switches
+6. ~~**Memory leaks with LORA**~~ ✅ Fixed - Buffer class cleans up properly
 
 ## Troubleshooting
 

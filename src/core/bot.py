@@ -17,7 +17,7 @@ import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from config import config
+from core.config import config
 
 # Load configuration
 SD_ENDPOINT = config.SD_URL

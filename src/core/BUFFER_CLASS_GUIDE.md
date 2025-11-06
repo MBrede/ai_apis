@@ -102,7 +102,7 @@ class MyModelBuffer(Model_Buffer):
 
 ```python
 from fastapi import FastAPI, Depends
-from auth import verify_api_key
+from core.auth import verify_api_key
 
 app = FastAPI()
 

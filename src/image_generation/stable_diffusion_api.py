@@ -26,8 +26,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from config import config
-from auth import verify_api_key, verify_admin_key
+from core.config import config
+from core.auth import verify_api_key, verify_admin_key
 from core.buffer_class import Model_Buffer
 
 sd_paths = {
