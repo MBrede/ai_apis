@@ -86,39 +86,27 @@ def init_mongodb():
                     print(f"✗ Error adding API key: {e}")
 
         # ==============================================================================
-        # Create Bot Settings Collection
+        # Create Bot Users Collection
         # ==============================================================================
 
-        bot_settings_collection = db.bot_settings
+        bot_users_collection = db.bot_users
 
         # Create indexes
-        bot_settings_collection.create_index("user_id", unique=True)
-        print("✓ Created bot_settings collection with indexes")
+        bot_users_collection.create_index("user_id", unique=True)
+        print("✓ Created bot_users collection with indexes")
 
-        # Insert default bot settings
-        default_bot_settings = {
-            "user_id": "default",
-            "sd_parameters": {
-                "model": "stabilityai/stable-diffusion-2-1",
-                "steps": 30,
-                "guidance_scale": 7.5,
-                "width": 512,
-                "height": 512,
-                "negative_prompt": "blurry, low quality, distorted"
-            },
-            "llm_mode": False,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
-        }
+        # No default users - users must be added via bot commands
 
-        try:
-            bot_settings_collection.insert_one(default_bot_settings)
-            print("✓ Added default bot settings")
-        except Exception as e:
-            if "duplicate key error" in str(e):
-                print("! Default bot settings already exist")
-            else:
-                print(f"✗ Error adding bot settings: {e}")
+        # ==============================================================================
+        # Create Bot Contacts Collection
+        # ==============================================================================
+
+        bot_contacts_collection = db.bot_contacts
+
+        # Create indexes
+        bot_contacts_collection.create_index("user_id", unique=True)
+        bot_contacts_collection.create_index([("last_attempt", -1)])
+        print("✓ Created bot_contacts collection with indexes")
 
         # ==============================================================================
         # Create Usage Logs Collection
@@ -142,9 +130,12 @@ def init_mongodb():
         print(f"Database: {mongodb_db}")
         print(f"Collections:")
         print(f"  - api_keys: {api_keys_collection.count_documents({})} documents")
-        print(f"  - bot_settings: {bot_settings_collection.count_documents({})} documents")
+        print(f"  - bot_users: {bot_users_collection.count_documents({})} documents")
+        print(f"  - bot_contacts: {bot_contacts_collection.count_documents({})} documents")
         print(f"  - usage_logs: {usage_logs_collection.count_documents({})} documents")
-        print("\n" + "⚠️  IMPORTANT: Change default API keys in production!")
+        print("\n" + "⚠️  IMPORTANT:")
+        print("  - Change default API keys in production!")
+        print("  - Add Telegram bot users via /add_user command")
         print("=" * 70)
 
         client.close()
