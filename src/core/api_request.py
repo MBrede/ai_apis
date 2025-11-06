@@ -5,6 +5,13 @@ from io import BytesIO
 from numpy import random
 from tqdm import tqdm
 import json
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from core.config import config
+
+
 def api_request(image_path: str = None,
                 model_id: str | None = 'stabilityai/stable-diffusion-2-1',
                 prompt: str | None = 'Ein schöner Strand im Süden Schleswig-Holsteins, digitales Kunstwerk',
@@ -20,12 +27,15 @@ def api_request(image_path: str = None,
     if args['image_path'] is not None:
         image_path = args['image_path']
         name_img = os.path.basename(image_path)
-        files = {'image': (name_img, open(image_path, 'rb'), 'multipart/form-data', {'Expires': '0'})}
-        del args['image_path']
+        with open(image_path, 'rb') as img_file:
+            files = {'image': (name_img, img_file.read(), 'multipart/form-data', {'Expires': '0'})}
+            del args['image_path']
+            url = f"{config.SD_URL}/post_config?{'&'.join([f'{k}={args[k]}' for k in args])}"
+            response = requests.post(url, files=files)
     else:
         files = {}
-    url = f"http://149.222.209.100:8000/post_config?{'&'.join([f'{k}={args[k]}' for k in args])}"
-    response = requests.post(url,  files=files)
+        url = f"{config.SD_URL}/post_config?{'&'.join([f'{k}={args[k]}' for k in args])}"
+        response = requests.post(url, files=files)
     if not response.ok:
         raise ValueError("API did return an error! Check your parameters!")
     return Image.open(BytesIO(response.content))
@@ -39,7 +49,7 @@ def data_request():
              "Generate a series of descriptions of places, people and scenes, each no longer than two sentences."]
     sample = texts[random.randint(0,len(texts))]
     instruction = "{} Seperate the examples by an ';'.".format(sample)
-    url = f"http://149.222.209.100:1234/llm_interface?temp=0.5&text={instruction}"
+    url = f"{config.LLM_COMMAND_R_URL}/llm_interface?temp=0.5&text={instruction}"
     response = requests.get(url)
     if not response.ok:
         raise ValueError("API did return an error! Check your parameters!")
@@ -56,7 +66,7 @@ if __name__ == '__main__':
             pass
     prompts = []
     for text in tqdm(texts, desc="Generating prompts..."):
-        response = requests.get(f"http://149.222.209.100:1234/llm_prompt_assistance", params={"text": text})
+        response = requests.get(f"{config.LLM_COMMAND_R_URL}/llm_prompt_assistance", params={"text": text})
         if response.ok:
             prompts.append({'text': text,
                             'prompt': response.text.split('Description:')[-1][:-1]})

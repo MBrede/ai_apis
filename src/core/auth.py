@@ -9,36 +9,13 @@ from typing import Optional
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from core.config import config
+from core.database import get_mongo_db
 import logging
 
 logger = logging.getLogger(__name__)
 
 # API Key header security scheme
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-# MongoDB connection (lazy initialized)
-_mongo_client = None
-_mongo_db = None
-
-
-def get_mongo_db():
-    """Get MongoDB database connection (lazy initialization)."""
-    global _mongo_client, _mongo_db
-
-    if not config.USE_MONGODB:
-        return None
-
-    if _mongo_db is None:
-        try:
-            from pymongo import MongoClient
-            _mongo_client = MongoClient(config.MONGODB_URL)
-            _mongo_db = _mongo_client[config.MONGODB_DB]
-            logger.info(f"Connected to MongoDB: {config.MONGODB_DB}")
-        except Exception as e:
-            logger.error(f"Failed to connect to MongoDB: {e}")
-            return None
-
-    return _mongo_db
 
 
 async def verify_api_key_mongodb(api_key: str) -> Optional[dict]:

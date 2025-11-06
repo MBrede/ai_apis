@@ -20,6 +20,7 @@ import logging
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from core.config import config
+from core.database import get_mongo_db
 
 logger = logging.getLogger(__name__)
 
@@ -31,30 +32,6 @@ BOT_TOKEN = config.TELEGRAM_TOKEN
 
 if not BOT_TOKEN:
     raise ValueError("TELEGRAM_TOKEN not set in environment variables!")
-
-# MongoDB connection (lazy initialized)
-_mongo_client = None
-_mongo_db = None
-
-
-def get_mongo_db():
-    """Get MongoDB database connection (lazy initialization)."""
-    global _mongo_client, _mongo_db
-
-    if not config.USE_MONGODB:
-        return None
-
-    if _mongo_db is None:
-        try:
-            from pymongo import MongoClient
-            _mongo_client = MongoClient(config.MONGODB_URL)
-            _mongo_db = _mongo_client[config.MONGODB_DB]
-            logger.info(f"Bot connected to MongoDB: {config.MONGODB_DB}")
-        except Exception as e:
-            logger.error(f"Bot failed to connect to MongoDB: {e}")
-            return None
-
-    return _mongo_db
 
 
 def load_users_from_mongodb():
