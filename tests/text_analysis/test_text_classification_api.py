@@ -6,8 +6,11 @@ Tests API endpoints, model loading, and prediction functionality.
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from fastapi.testclient import TestClient
-import torch
+
+# Skip these tests if the required packages aren't installed
+pytest.importorskip("fastapi")
+pytest.importorskip("torch")
+pytest.importorskip("transformers")
 
 
 @pytest.fixture
