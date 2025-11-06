@@ -1,8 +1,13 @@
 """
-To start the API navigate to the scripts folder and call:
-gunicorn stable_diffusion_api:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:1234
-this requires a gunicorn to be installed (pip install should do the trick)
+Stable Diffusion API with LORA support and authentication.
+
+To start the API:
+    gunicorn stable_diffusion_api:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:1234
 """
+
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import torch
 from diffusers import (StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, DiffusionPipeline,
@@ -13,15 +18,14 @@ from pydantic import BaseModel
 from io import BytesIO
 import numpy as np
 from PIL import Image
-import os
 import subprocess
 from tqdm import tqdm
-import dotenv
 import json
 import requests
 import re
 
-dotenv.load_dotenv('.env')
+from config import config
+from auth import verify_api_key, verify_admin_key
 
 sd_paths = {
     'SD 1.5': "runwayml/stable-diffusion-v1-5",
@@ -125,7 +129,7 @@ class DiffusionModel:
             if not os.path.exists(os.path.join('loras', lora)):
                 os.mkdir(os.path.join('loras', lora))
                 subprocess.run(['wget', '-O', os.path.join('loras', lora, 'lora.safetensors'),
-                                self.implemeted_loras[lora]['lora_path'] + f'&token={os.environ["civit_key"]}'])
+                                self.implemeted_loras[lora]['lora_path'] + f'&token={config.CIVIT_KEY}'])
 
     def _validate_model_config(self, config: dict) -> dict:
         if 'torch_dtype' in config:
@@ -138,7 +142,7 @@ class DiffusionModel:
         self.loaded_pipeline = 'flux'
         pipe = FluxPipeline.from_pretrained(self.model_id, **self.config,
                                             safety_checker=None,
-                                            token=os.environ["hf_token"])
+                                            token=config.HF_TOKEN)
         pipe.vae.enable_slicing()
         pipe.vae.enable_tiling()
         self.pipe = pipe.to("cuda:1")
@@ -153,10 +157,10 @@ class DiffusionModel:
             scheduler = 'euler'
         if self.type == 'prompt2img':
             pipe = StableDiffusionXLPipeline.from_pretrained(self.model_id, **self.config,
-                                                                    token=os.environ["hf_token"])
+                                                                    token=config.HF_TOKEN)
         else:
             pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(self.model_id, **self.config,
-                                                                    token=os.environ["hf_token"])
+                                                                    token=config.HF_TOKEN)
 
         pipe.scheduler = self.schedulers[scheduler].from_config(pipe.scheduler.config)
         pipe.unet.added_cond_kwargs={'text_embeds': []}
@@ -328,8 +332,9 @@ def get_bytes_value(image):
 
 
 @router.get("/llm_prompt_assistance")
-async def llm_prompt_assistance(text: str):
-    answer = requests.get('http://149.222.209.66:8000/llm_prompt_assistance?text={}'.format(text))
+async def llm_prompt_assistance(text: str, api_key: str = Depends(verify_api_key)):
+    """Forward LLM prompt assistance request (legacy endpoint)."""
+    answer = requests.get(f'{config.LLM_MIXTRAL_URL}/llm_prompt_assistance?text={text}')
     if answer.ok:
         return answer.content
     else:
@@ -337,9 +342,9 @@ async def llm_prompt_assistance(text: str):
 
 
 @router.get("/llm_interface")
-async def llm_interface(text: str, role: str = None):
-    answer = requests.get('http://149.222.209.66:8000/llm_interface?text={text}'
-                          .format(text=text))
+async def llm_interface(text: str, role: str = None, api_key: str = Depends(verify_api_key)):
+    """Forward LLM interface request (legacy endpoint)."""
+    answer = requests.get(f'{config.LLM_MIXTRAL_URL}/llm_interface?text={text}')
     if answer.ok:
         return answer.content
     else:
@@ -354,44 +359,49 @@ async def llm_interface(text: str, role: str = None):
              },
              response_class=Response
              )
-async def get_image(item: Item = Depends(), image: UploadFile = File(None)):
-    config = _refactor_config(vars(item))
+async def get_image(item: Item = Depends(), image: UploadFile = File(None), api_key: str = Depends(verify_api_key)):
+    """Generate images using Stable Diffusion with optional LORA."""
+    cfg = _refactor_config(vars(item))
     prompt = item.prompt
-    del config['prompt']
+    del cfg['prompt']
     if image is not None:
-        config['image'] = await image.read()
-    image = image_grid(model.gen_image(prompt, config))
+        cfg['image'] = await image.read()
+    image = image_grid(model.gen_image(prompt, cfg))
     image = get_bytes_value(image)
     return Response(content=image, media_type='image/png')
 
 
 @router.get("/get_model_embedding")
-async def get_embedded_text(prompt: str):
+async def get_embedded_text(prompt: str, api_key: str = Depends(verify_api_key)):
+    """Get text embeddings from current model."""
     embedding, embedded_text = model._prompt_to_embedding(prompt)
     return embedded_text
 
 
 @router.get("/get_implemented_parameters")
-async def get_parameters():
+async def get_parameters(api_key: str = Depends(verify_api_key)):
+    """Get list of configurable parameters."""
     item = Item()
     parameters = _refactor_config(vars(item))
     return parameters
 
 
 @router.get("/get_available_loras")
-async def get_available_loras():
+async def get_available_loras(api_key: str = Depends(verify_api_key)):
+    """Get list of available LORA models."""
     return model.implemeted_loras
 
 
 @router.get("/get_available_stable_diffs")
-async def get_available_SDs():
+async def get_available_SDs(api_key: str = Depends(verify_api_key)):
+    """Get list of available Stable Diffusion models."""
     global sd_paths
     return sd_paths
 
 
-@router.get("/add_new_lora",
-            include_in_schema=False)
-async def add_new_lora(name):
+@router.post("/add_new_lora")
+async def add_new_lora(name: str, api_key: str = Depends(verify_admin_key)):
+    """Add a new LORA model from Civitai (admin only)."""
     answer = model.add_new_lora(name)
     return answer
 

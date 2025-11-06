@@ -1,29 +1,32 @@
 """
-gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
+Whisper Audio Transcription API with speaker diarization.
+
+To start:
+    gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
-import subprocess
+import sys
 import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import subprocess
 import numpy as np
 import tempfile
-import contextlib
 import torch
-import datetime
 
 import whisper
-from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException
-from typing import Annotated
+from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends
 from pyannote.audio import Pipeline
-from dotenv import load_dotenv
 
-loaded_model = "turbo"
+from config import config
+from auth import verify_api_key
+
+loaded_model = config.DEFAULT_WHISPER_MODEL
 model = whisper.load_model(loaded_model)
 app = FastAPI()
 router = APIRouter()
 
-if not load_dotenv():
-    raise ValueError("no keys found!")
 pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1",
-                                    use_auth_token=os.getenv('hf_token')).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+                                    use_auth_token=config.HF_TOKEN).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 
 def diarize(file, 
@@ -69,7 +72,8 @@ def diarize(file,
 
 
 @router.post("/transcribe/")
-async def get_answer(file: UploadFile, model_to_use: str = 'turbo'):
+async def transcribe(file: UploadFile, model_to_use: str = 'turbo', api_key: str = Depends(verify_api_key)):
+    """Transcribe audio file using Whisper."""
     global model
     global loaded_model
     if loaded_model != model_to_use:
@@ -83,10 +87,12 @@ async def get_answer(file: UploadFile, model_to_use: str = 'turbo'):
     return {"answer": answer}
 
 @router.post("/transcribe_and_diarize/")
-async def get_answer(file: UploadFile, model_to_use: str = 'turbo', 
+async def transcribe_diarize(file: UploadFile, model_to_use: str = 'turbo',
                      num_speakers: int = None,
                      min_speakers : int = None,
-                     max_speakers : int = None):
+                     max_speakers : int = None,
+                     api_key: str = Depends(verify_api_key)):
+    """Transcribe audio with speaker identification."""
     global model
     global loaded_model
     if loaded_model != model_to_use:

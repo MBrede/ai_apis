@@ -20,21 +20,27 @@ sd_api/
 
 ## ⚠️ Important Notes
 
-### LLM Models Status
-The LLM APIs in `src/llm/` use **older model versions** (Mixtral-8x7B-Instruct-v0.1, c4ai-command-r-v01-4bit) which may be outdated. Consider upgrading to:
-- Mixtral-8x22B-Instruct or newer
-- Llama 3.3 70B/405B
-- Qwen 2.5 or newer models
+### OLLAMA Integration 🆕
+The Telegram bot now uses **OLLAMA** for all LLM operations:
+- Endpoint: `149.222.209.66:2345`
+- Default model: `llama3.3`
+- Configurable via `OLLAMA_HOST`, `OLLAMA_PORT`, `OLLAMA_MODEL` in `.env`
 
-### Known Issues
-1. **Hardcoded IP addresses** - Replace with environment variables:
-   - `149.222.209.100:8000`
-   - `149.222.209.66:8080`
-   - `149.222.209.100:1234`
+### LLM APIs - Legacy Status
+The LLM APIs in `src/llm/` use **older model versions** and are kept for **backward compatibility only**:
+- Mixtral-8x7B-Instruct-v0.1 (2023)
+- c4ai-command-r-v01-4bit (old version)
 
-2. **Fixed bugs** (already patched):
-   - ✅ `buffer_class.py`: Added missing `import gc`
-   - ✅ `huggingface_api.py`: Fixed typo `item.message` → `item.messages`
+**Modern LLM access:** Use OLLAMA endpoint for current models.
+
+### Recent Changes ✅
+1. ✅ **Authentication added** - All APIs now require API key
+2. ✅ **Centralized configuration** - All IPs/ports in `config.py`
+3. ✅ **Bot uses OLLAMA** - Switched from legacy LLM APIs
+4. ✅ **Fixed bugs**:
+   - `buffer_class.py`: Added missing `import gc`
+   - `huggingface_api.py`: Fixed typo `item.message` → `item.messages`
+5. ✅ **Removed idefics_api** - Had incomplete code
 
 ## 🚀 Installation
 
@@ -60,31 +66,58 @@ pip install -e ".[all]"
 
 # Set up environment variables
 cp .env.example .env
-# Edit .env with your tokens:
-# - hf_token (HuggingFace)
-# - civit_key (Civitai for LORA models)
-# - telegram_token (Telegram Bot API)
+# Edit .env with your configuration:
+# - API_KEY (REQUIRED for authentication!)
+# - ADMIN_API_KEY (for admin operations)
+# - HF_TOKEN (HuggingFace)
+# - CIVIT_KEY (Civitai for LORA models)
+# - TELEGRAM_TOKEN (Telegram Bot API)
+# - OLLAMA_HOST/PORT (LLM endpoint)
+# - SD_HOST/PORT (Stable Diffusion endpoint)
+# - WHISPER_HOST/PORT (Audio transcription endpoint)
 ```
+
+## 🔐 Authentication
+
+All APIs are protected by API key authentication:
+
+```bash
+# Make requests with X-API-Key header
+curl -H "X-API-Key: your-api-key" http://localhost:1234/get_available_stable_diffs
+
+# Python example
+headers = {"X-API-Key": "your-api-key"}
+response = requests.get("http://localhost:1234/get_available_stable_diffs", headers=headers)
+```
+
+**Security Notes:**
+- Set `API_KEY` in `.env` before running APIs
+- Use `ADMIN_API_KEY` for privileged operations (adding LORA models)
+- Set `REQUIRE_AUTH=False` only for local development
+- Always use HTTPS in production
 
 ## 📚 API Modules
 
 ### Core (`src/core/`)
-- **bot.py** - Telegram bot interface for image generation and LLM queries
+- **config.py** - 🆕 Centralized configuration management
+- **auth.py** - 🆕 API key authentication
+- **bot.py** - Telegram bot (now uses OLLAMA for LLM)
 - **api_request.py** - Client utilities for making API requests
 - **buffer_class.py** - Abstract base class for model memory management
 
-### LLM (`src/llm/`) ⚠️ Older Models
-- **huggingface_api.py** - Mixtral-8x7B API (port 8000)
-- **command_r_api.py** - Cohere Command-R API (port 1234)
+### LLM (`src/llm/`) ⚠️ Legacy - For Backward Compatibility Only
+- **huggingface_api.py** - Mixtral-8x7B API (old model, port 8000)
+- **command_r_api.py** - Cohere Command-R API (old model, port 1234)
 - **llm_wrapper.py** - Unified LLM endpoint manager
 
+**Note:** Telegram bot now uses **OLLAMA** (149.222.209.66:2345) for all LLM operations. The legacy LLM APIs are kept for backward compatibility only.
+
 ### Image Generation (`src/image_generation/`)
-- **stable_diffusion_api.py** - Main SD API with LORA support (port 1234)
+- **stable_diffusion_api.py** - Main SD API with LORA support (port 1234) ✅ Auth enabled
 - **unidiffuser_api.py** - Multi-modal generation (text↔image) (port 8000)
-- **idefics_api.py** - Vision-to-text with Idefics2 (port 8080)
 
 ### Audio (`src/audio/`)
-- **whisper_api.py** - Speech transcription with speaker diarization (port 8080)
+- **whisper_api.py** - Speech transcription with speaker diarization (port 8080) ✅ Auth enabled
 
 ### Text Analysis (`src/text_analysis/`)
 - **sentiment_api.py** - Sentiment analysis
