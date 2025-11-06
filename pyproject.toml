@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sd-api"
+name = "ai-apis"
 version = "0.1.0"
 description = "AI APIs collection for LLMs, Stable Diffusion, audio transcription, and text analysis"
 readme = "README.md"
@@ -46,7 +46,7 @@ api-core = [
 
 # Stable Diffusion API
 stable-diffusion = [
-    "sd-api[api-core]",
+    "ai-apis[api-core]",
     "torch>=2.6.0",
     "diffusers>=0.31.0",
     "transformers>=4.57.1",
@@ -59,7 +59,7 @@ stable-diffusion = [
 
 # Whisper Audio API
 whisper = [
-    "sd-api[api-core]",
+    "ai-apis[api-core]",
     "torch>=2.6.0",
     "openai-whisper>=20250625",
     "pyannote-audio>=4.0.1",
@@ -69,7 +69,7 @@ whisper = [
 
 # Text Analysis API
 text-analysis = [
-    "sd-api[api-core]",
+    "ai-apis[api-core]",
     "torch>=2.6.0",
     "transformers>=4.57.1",
     "setfit>=1.1.3",
@@ -113,12 +113,12 @@ cuda = [
 
 # All APIs (no bot, no training)
 apis = [
-    "sd-api[stable-diffusion,whisper,text-analysis]",
+    "ai-apis[stable-diffusion,whisper,text-analysis]",
 ]
 
 # Everything including bot and training
 all = [
-    "sd-api[bot,apis,llm-training,dev,quantization,cuda]",
+    "ai-apis[bot,apis,llm-training,dev,quantization,cuda]",
 ]
 
 [project.urls]
