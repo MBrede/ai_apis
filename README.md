@@ -103,12 +103,71 @@ response = requests.post(
 - **MongoDB Integration**: Optional persistent storage for API keys and bot settings
 - **Docker Support**: Full GPU support with NVIDIA runtime
 - **Modular Dependencies**: Install only what you need
+- **Comprehensive Testing**: Unit tests for all core modules and APIs
+- **CI/CD Pipeline**: Automated linting, testing, and Docker builds
 
 ## Requirements
 
 - Python 3.12+
 - NVIDIA GPU with CUDA 13.0+ (for ML APIs)
 - Docker with NVIDIA runtime (for Docker deployment)
+
+## Development
+
+### Running Tests
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=src --cov-report=html
+
+# Run specific test file
+pytest tests/core/test_config.py -v
+
+# Run tests in parallel (faster)
+pytest -n auto
+```
+
+### Code Quality
+
+```bash
+# Format code
+black src/ tests/
+isort src/ tests/
+
+# Lint
+ruff check src/ tests/
+
+# Type check
+mypy src/
+```
+
+### CI/CD
+
+The project uses GitHub Actions for continuous integration:
+
+- **Lint & Type Check** (`lint.yml`): Runs on every push and PR
+  - Black formatting check
+  - isort import sorting
+  - Ruff linting
+  - MyPy type checking
+
+- **Tests** (`test.yml`): Runs on every push and PR
+  - Unit tests with pytest
+  - Coverage reporting
+  - Import validation
+
+- **Docker Build** (`docker.yml`): Builds and scans Docker images
+  - Multi-service builds
+  - Security scanning with Trivy
+  - Automatic push to GHCR on main branch
+
+All workflows run on Python 3.12 and include caching for faster builds.
 
 ## Documentation
 
