@@ -6,9 +6,11 @@ and thread safety.
 """
 
 import time
-import pytest
 from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+
 from src.core.buffer_class import Model_Buffer
 
 

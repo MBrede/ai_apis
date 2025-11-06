@@ -7,6 +7,7 @@ Used by authentication system and bot for persistent storage.
 
 import logging
 from typing import Optional
+
 from pymongo.database import Database
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ def get_mongo_db() -> Optional[Database]:
     if _mongo_db is None:
         try:
             from pymongo import MongoClient
+
             _mongo_client = MongoClient(config.MONGODB_URL)
             _mongo_db = _mongo_client[config.MONGODB_DB]
             logger.info(f"Connected to MongoDB: {config.MONGODB_DB}")

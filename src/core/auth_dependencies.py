@@ -6,7 +6,8 @@ Separated from core auth to avoid requiring FastAPI for non-API uses.
 """
 
 from typing import Optional
-from src.core.auth import _verify_api_key_impl, _verify_admin_key_impl, get_api_key_header
+
+from src.core.auth import _verify_admin_key_impl, _verify_api_key_impl, get_api_key_header
 
 
 def create_api_key_dependency():

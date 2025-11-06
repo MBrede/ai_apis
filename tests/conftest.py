@@ -5,9 +5,10 @@ This module provides common fixtures and configuration for all tests.
 """
 
 import os
-import pytest
 from typing import AsyncGenerator
-from unittest.mock import Mock, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -68,12 +69,14 @@ def mock_mongodb():
     mock_db.api_keys = mock_collection
 
     # Mock find_one to return valid key
-    mock_collection.find_one = Mock(return_value={
-        "key": "test-db-api-key",
-        "active": True,
-        "name": "Test Key",
-        "is_admin": False
-    })
+    mock_collection.find_one = Mock(
+        return_value={
+            "key": "test-db-api-key",
+            "active": True,
+            "name": "Test Key",
+            "is_admin": False,
+        }
+    )
 
     return mock_db
 
@@ -88,12 +91,14 @@ def mock_mongodb_admin():
     mock_db.api_keys = mock_collection
 
     # Mock find_one to return admin key
-    mock_collection.find_one = Mock(return_value={
-        "key": "test-admin-db-key",
-        "active": True,
-        "name": "Admin Key",
-        "is_admin": True
-    })
+    mock_collection.find_one = Mock(
+        return_value={
+            "key": "test-admin-db-key",
+            "active": True,
+            "name": "Admin Key",
+            "is_admin": True,
+        }
+    )
 
     return mock_db
 

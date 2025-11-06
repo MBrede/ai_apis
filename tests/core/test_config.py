@@ -5,8 +5,10 @@ Tests configuration loading, validation, and environment variable handling.
 """
 
 import os
-import pytest
 from pathlib import Path
+
+import pytest
+
 from src.core.config import APIConfig
 
 
@@ -175,6 +177,7 @@ class TestAPIConfig:
     def test_config_print_config(self, mock_env_vars, caplog):
         """Test that print_config logs configuration details."""
         import logging
+
         caplog.set_level(logging.INFO)
 
         config = APIConfig()

@@ -28,12 +28,13 @@ Usage Example:
 """
 
 import gc
-import torch
-from abc import ABC, abstractmethod
-from threading import Timer, Lock
-from datetime import datetime
-from typing import Any, Optional
 import logging
+from abc import ABC, abstractmethod
+from datetime import datetime
+from threading import Lock, Timer
+from typing import Any, Optional
+
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,9 @@ class Model_Buffer(ABC):
                 "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
                 "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
                 "timeout_seconds": self.timeout,
-                "timer_active": self.timer is not None and self.timer.is_alive() if self.timer else False,
+                "timer_active": (
+                    self.timer is not None and self.timer.is_alive() if self.timer else False
+                ),
             }
 
     def unload_model(self) -> None:
@@ -282,7 +285,7 @@ class Model_Buffer(ABC):
     def __del__(self):
         """Cleanup on deletion - cancel timer and unload model."""
         try:
-            if hasattr(self, 'timer') and self.timer is not None:
+            if hasattr(self, "timer") and self.timer is not None:
                 self.timer.cancel()
         except Exception:
             pass

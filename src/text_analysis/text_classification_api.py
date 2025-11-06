@@ -1,12 +1,13 @@
 import os
-from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from huggingface_hub import hf_api
-import torch
-from typing import List
-from dotenv import load_dotenv
-from setfit import SetFitModel
 from datetime import datetime
+from typing import List
+
+import torch
+from dotenv import load_dotenv
+from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
+from huggingface_hub import hf_api
+from setfit import SetFitModel
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from src.core.buffer_class import Model_Buffer
 from src.core.config import config
@@ -93,9 +94,10 @@ classification_buffer = ClassificationBuffer()
 app = FastAPI()
 router = APIRouter()
 
-from pydantic import BaseModel
-from core.auth import verify_api_key
 from fastapi import Depends
+from pydantic import BaseModel
+
+from core.auth import verify_api_key
 
 
 class Text_Request(BaseModel):

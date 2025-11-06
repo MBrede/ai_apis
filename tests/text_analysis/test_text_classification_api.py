@@ -4,8 +4,9 @@ Tests for the text classification API.
 Tests API endpoints, model loading, and prediction functionality.
 """
 
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 # Skip these tests if the required packages aren't installed
 pytest.importorskip("fastapi")
@@ -48,7 +49,12 @@ class TestClassificationBuffer:
     @patch("src.text_analysis.text_classification_api.AutoModelForSequenceClassification")
     @patch("src.text_analysis.text_classification_api.AutoTokenizer")
     def test_load_standard_model(
-        self, mock_tokenizer_class, mock_model_class, mock_hf_api, mock_classification_model, mock_tokenizer
+        self,
+        mock_tokenizer_class,
+        mock_model_class,
+        mock_hf_api,
+        mock_classification_model,
+        mock_tokenizer,
     ):
         """Test loading a standard transformer model."""
         from src.text_analysis.text_classification_api import ClassificationBuffer
@@ -127,8 +133,13 @@ class TestClassificationBuffer:
     @patch("src.text_analysis.text_classification_api.AutoTokenizer")
     @patch("src.text_analysis.text_classification_api.torch")
     def test_predict_proba_standard_model(
-        self, mock_torch, mock_tokenizer_class, mock_model_class, mock_hf_api,
-        mock_classification_model, mock_tokenizer
+        self,
+        mock_torch,
+        mock_tokenizer_class,
+        mock_model_class,
+        mock_hf_api,
+        mock_classification_model,
+        mock_tokenizer,
     ):
         """Test prediction with standard transformer model."""
         from src.text_analysis.text_classification_api import ClassificationBuffer
@@ -150,10 +161,9 @@ class TestClassificationBuffer:
         # Mock softmax
         mock_torch.no_grad.return_value.__enter__ = Mock()
         mock_torch.no_grad.return_value.__exit__ = Mock()
-        mock_torch.nn.functional.softmax = Mock(return_value=torch.tensor([
-            [0.2, 0.3, 0.5],
-            [0.6, 0.3, 0.1]
-        ]))
+        mock_torch.nn.functional.softmax = Mock(
+            return_value=torch.tensor([[0.2, 0.3, 0.5], [0.6, 0.3, 0.1]])
+        )
 
         buffer = ClassificationBuffer()
         buffer.load_model("test/model", timeout=300)
@@ -169,8 +179,9 @@ class TestClassificationBuffer:
     @patch("src.text_analysis.text_classification_api.SetFitModel")
     def test_predict_proba_setfit_model(self, mock_setfit_class, mock_hf_api, mock_setfit_model):
         """Test prediction with SetFit model."""
-        from src.text_analysis.text_classification_api import ClassificationBuffer
         import numpy as np
+
+        from src.text_analysis.text_classification_api import ClassificationBuffer
 
         # Mock HuggingFace API
         mock_model_info = Mock()
@@ -179,10 +190,7 @@ class TestClassificationBuffer:
 
         # Mock SetFit model
         mock_setfit_class.from_pretrained.return_value = mock_setfit_model
-        mock_setfit_model.predict_proba.return_value = np.array([
-            [0.2, 0.8],
-            [0.7, 0.3]
-        ])
+        mock_setfit_model.predict_proba.return_value = np.array([[0.2, 0.8], [0.7, 0.3]])
 
         buffer = ClassificationBuffer()
         buffer.load_model("test/setfit-model", timeout=300)
@@ -220,18 +228,15 @@ class TestTextClassificationAPIEndpoints:
 
         # Mock buffer
         mock_buffer.load_model = Mock()
-        mock_buffer.predict_proba = Mock(return_value=[
-            {"negative": 0.1, "neutral": 0.2, "positive": 0.7}
-        ])
+        mock_buffer.predict_proba = Mock(
+            return_value=[{"negative": 0.1, "neutral": 0.2, "positive": 0.7}]
+        )
 
         client = TestClient(app)
         response = client.post(
             "/predict_proba/",
-            json={
-                "text": ["This is great!"],
-                "model": "test/model"
-            },
-            headers={"X-API-Key": "test-key"}
+            json={"text": ["This is great!"], "model": "test/model"},
+            headers={"X-API-Key": "test-key"},
         )
 
         assert response.status_code == 200
@@ -256,9 +261,7 @@ class TestTextClassificationAPIEndpoints:
 
         client = TestClient(app)
         response = client.post(
-            "/predict_proba/",
-            json={"text": ["Test text"]},
-            headers={"X-API-Key": "test-key"}
+            "/predict_proba/", json={"text": ["Test text"]}, headers={"X-API-Key": "test-key"}
         )
 
         assert response.status_code == 200
@@ -275,18 +278,17 @@ class TestTextClassificationAPIEndpoints:
         mock_verify_key.return_value = "test-key"
 
         # Mock buffer status
-        mock_buffer.get_status = Mock(return_value={
-            "is_loaded": True,
-            "loaded_at": "2025-01-01T00:00:00",
-            "timeout_seconds": 300,
-            "timer_active": True
-        })
+        mock_buffer.get_status = Mock(
+            return_value={
+                "is_loaded": True,
+                "loaded_at": "2025-01-01T00:00:00",
+                "timeout_seconds": 300,
+                "timer_active": True,
+            }
+        )
 
         client = TestClient(app)
-        response = client.get(
-            "/buffer_status/",
-            headers={"X-API-Key": "test-key"}
-        )
+        response = client.get("/buffer_status/", headers={"X-API-Key": "test-key"})
 
         assert response.status_code == 200
         data = response.json()

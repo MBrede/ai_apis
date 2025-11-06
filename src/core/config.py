@@ -6,10 +6,11 @@ including endpoint URLs, authentication settings, and API keys.
 Load settings from environment variables when available.
 """
 
-import os
 import logging
+import os
 from pathlib import Path
 from typing import Optional
+
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -71,10 +72,7 @@ class APIConfig:
     USE_MONGODB: bool = os.getenv("USE_MONGODB", "False").lower() == "true"
 
     # MongoDB connection URL
-    MONGODB_URL: str = os.getenv(
-        "MONGODB_URL",
-        "mongodb://localhost:27017/"
-    )
+    MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
 
     # MongoDB database name
     MONGODB_DB: str = os.getenv("MONGODB_DB", "ai_apis")
@@ -119,10 +117,7 @@ class APIConfig:
     DEFAULT_WHISPER_MODEL: str = os.getenv("DEFAULT_WHISPER_MODEL", "turbo")
 
     # Default Stable Diffusion model
-    DEFAULT_SD_MODEL: str = os.getenv(
-        "DEFAULT_SD_MODEL",
-        "stabilityai/stable-diffusion-2-1"
-    )
+    DEFAULT_SD_MODEL: str = os.getenv("DEFAULT_SD_MODEL", "stabilityai/stable-diffusion-2-1")
 
     # Torch dtype
     DEFAULT_TORCH_DTYPE: str = os.getenv("DEFAULT_TORCH_DTYPE", "float16")
@@ -167,14 +162,10 @@ class APIConfig:
             )
 
         if not cls.HF_TOKEN:
-            warnings.append(
-                "⚠️  HF_TOKEN not set. HuggingFace model downloads may fail."
-            )
+            warnings.append("⚠️  HF_TOKEN not set. HuggingFace model downloads may fail.")
 
         if not cls.TELEGRAM_TOKEN:
-            warnings.append(
-                "⚠️  TELEGRAM_TOKEN not set. Telegram bot will not work."
-            )
+            warnings.append("⚠️  TELEGRAM_TOKEN not set. Telegram bot will not work.")
 
         return warnings
 

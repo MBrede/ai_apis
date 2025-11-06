@@ -6,10 +6,11 @@ Supports both environment variable and MongoDB-based authentication.
 Supports multiple API keys (comma-separated in environment variables).
 """
 
-from typing import Optional, Set, TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Optional, Set
+
 from src.core.config import config
 from src.core.database import get_mongo_db
-import logging
 
 if TYPE_CHECKING:
     from fastapi import HTTPException, Security, status
@@ -27,6 +28,7 @@ def _get_api_key_header():
     if _api_key_header is None:
         try:
             from fastapi.security import APIKeyHeader
+
             _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
         except ImportError:
             raise ImportError(
@@ -52,6 +54,7 @@ def get_api_key_dependency():
             ...
     """
     from fastapi import Security
+
     return Security(_get_api_key_header())
 
 
@@ -81,7 +84,7 @@ def _parse_api_keys(key_string: Optional[str]) -> Set[str]:
     """
     if not key_string:
         return set()
-    return {key.strip() for key in key_string.split(',') if key.strip()}
+    return {key.strip() for key in key_string.split(",") if key.strip()}
 
 
 async def verify_api_key_mongodb(api_key: str) -> Optional[dict]:
@@ -182,6 +185,7 @@ async def verify_api_key(api_key: Optional[str] = None) -> str:
     if api_key is None:
         try:
             from fastapi import Security
+
             # This branch is for when used as a dependency
             return await _verify_api_key_impl(api_key)
         except ImportError:

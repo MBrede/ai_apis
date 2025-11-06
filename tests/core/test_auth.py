@@ -4,9 +4,11 @@ Tests for the authentication module.
 Tests API key verification, admin key verification, and MongoDB integration.
 """
 
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
 from fastapi import HTTPException
+
 from src.core import auth
 
 
@@ -56,10 +58,9 @@ class TestVerifyAPIKeyMongoDB:
             assert result is not None
             assert result["key"] == "test-db-api-key"
             assert result["active"] is True
-            mock_mongodb.api_keys.find_one.assert_called_once_with({
-                "key": "test-db-api-key",
-                "active": True
-            })
+            mock_mongodb.api_keys.find_one.assert_called_once_with(
+                {"key": "test-db-api-key", "active": True}
+            )
 
     @pytest.mark.asyncio
     async def test_verify_invalid_key(self, mock_mongodb):
