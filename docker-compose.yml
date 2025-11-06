@@ -27,7 +27,7 @@ services:
   stable_diffusion:
     build:
       context: .
-      dockerfile: Dockerfile.stable_diffusion
+      dockerfile: docker/Dockerfile.stable_diffusion
     container_name: ai_apis_stable_diffusion
     restart: unless-stopped
     environment:
@@ -61,7 +61,7 @@ services:
   whisper:
     build:
       context: .
-      dockerfile: Dockerfile.whisper
+      dockerfile: docker/Dockerfile.whisper
     container_name: ai_apis_whisper
     restart: unless-stopped
     environment:
@@ -92,7 +92,7 @@ services:
   text_classification:
     build:
       context: .
-      dockerfile: Dockerfile.text_analysis
+      dockerfile: docker/Dockerfile.text_analysis
     container_name: ai_apis_text_classification
     restart: unless-stopped
     environment:
@@ -121,7 +121,7 @@ services:
   telegram_bot:
     build:
       context: .
-      dockerfile: Dockerfile.bot
+      dockerfile: docker/Dockerfile.bot
     container_name: ai_apis_telegram_bot
     restart: unless-stopped
     environment:
