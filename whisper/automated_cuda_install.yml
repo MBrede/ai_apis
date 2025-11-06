@@ -1,0 +1,100 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - python3-pip
+  - jq
+  - wget
+  - dpkg
+  - gcc
+  - make
+  - python3-venv
+  - lsb-release
+
+write_files:
+  - path: /etc/profile.d/cuda.sh
+    permissions: '0755'
+    content: |
+      export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
+      export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+
+runcmd:
+  - |
+    set -e
+    echo "=========================================="
+    echo "STARTING CUDA INSTALLATION - PHASE 1"
+    echo "=========================================="
+
+    if DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]') && \
+       VERSION=$(lsb_release -rs | tr -d '.') && \
+       DISTRO_VERSION="${DISTRO}${VERSION}" && \
+       ARCH="x86_64" && \
+       apt install -y linux-headers-$(uname -r) && \
+       wget https://developer.download.nvidia.com/compute/cuda/repos/${DISTRO_VERSION}/${ARCH}/cuda-keyring_1.1-1_all.deb && \
+       dpkg -i cuda-keyring_1.1-1_all.deb && \
+       apt-get update -y && \
+       DRIVER_VERSION=$(apt-cache madison cuda-drivers | head -1 | awk '{print $3}' | cut -d'-' -f1 | cut -d'.' -f1) && \
+       apt-get install -y cuda-drivers-${DRIVER_VERSION} && \
+       apt-get install -y cuda-toolkit && \
+       apt-get install -y nvidia-gds && \
+       touch /var/tmp/reboot_flag; then
+      curl -s https://gist.githubusercontent.com/MBrede/f1995c2a059fe269a92d2beadc62351f/raw/2aed46880e5c78f42e3c81cb6c330c0cebf01bf6/success.txt || echo "SUCCESS"
+      echo "PHASE 1 COMPLETE - REBOOTING"
+      reboot
+    else
+      curl -s https://gist.githubusercontent.com/MBrede/c5c8a22f5527afd098ab1501c2763430/raw/d18bb90713f39974c09c1ac5e34d64e98c0232b1/fail.txt || echo "FAIL"
+      echo "PHASE 1 FAILED - CHECK LOGS"
+      exit 1
+    fi
+
+bootcmd:
+  - |
+    if [ -f /var/tmp/reboot_flag ]; then
+      set -e
+      echo "=========================================="
+      echo "STARTING CUDA INSTALLATION - PHASE 2"
+      echo "Installing cuDNN after driver load"
+      echo "=========================================="
+
+      if rm /var/tmp/reboot_flag && \
+         CUDA_VERSION=$(apt-cache madison cuda-toolkit | head -1 | awk '{print $3}' | cut -d'-' -f1,2) && \
+         CUDA_MAJOR=$(echo $CUDA_VERSION | cut -d'.' -f1) && \
+         CUDNN_MAJOR=$(apt-cache search libcudnn | grep -oP 'libcudnn\K[0-9]+' | sort -n | tail -1) && \
+         CUDNN_PACKAGE="libcudnn${CUDNN_MAJOR}-cuda-${CUDA_MAJOR}" && \
+         CUDNN_VERSION=$(apt-cache madison ${CUDNN_PACKAGE} | head -1 | awk '{print $3}') && \
+         apt-get install -y ${CUDNN_PACKAGE}=${CUDNN_VERSION} && \
+         apt-get --fix-broken install -y && \
+         touch /var/tmp/reboot_flag_2; then
+        curl -s https://gist.githubusercontent.com/MBrede/f1995c2a059fe269a92d2beadc62351f/raw/2aed46880e5c78f42e3c81cb6c330c0cebf01bf6/success.txt || echo "SUCCESS"
+        echo "PHASE 2 COMPLETE - REBOOTING"
+        reboot
+      else
+        curl -s https://gist.githubusercontent.com/MBrede/c5c8a22f5527afd098ab1501c2763430/raw/d18bb90713f39974c09c1ac5e34d64e98c0232b1/fail.txt || echo "FAIL"
+        echo "PHASE 2 FAILED - CHECK LOGS"
+        exit 1
+      fi
+    fi
+  - |
+    if [ -f /var/tmp/reboot_flag_2 ]; then
+      echo "=========================================="
+      echo "STARTING CUDA INSTALLATION - PHASE 3"
+      echo "Installing uv package manager"
+      echo "=========================================="
+
+      rm /var/tmp/reboot_flag_2
+
+      export HOME=/root
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      if [ -f /root/.local/bin/uv ]; then
+        curl -s https://gist.githubusercontent.com/MBrede/f1995c2a059fe269a92d2beadc62351f/raw/2aed46880e5c78f42e3c81cb6c330c0cebf01bf6/success.txt || echo "SUCCESS"
+        echo "ALL PHASES COMPLETE - CUDA READY!"
+        echo "uv installed at /root/.local/bin/uv"
+        echo "CUDA environment will be available after re-login"
+        reboot
+      else
+        curl -s https://gist.githubusercontent.com/MBrede/c5c8a22f5527afd098ab1501c2763430/raw/d18bb90713f39974c09c1ac5e34d64e98c0232b1/fail.txt || echo "FAIL"
+        echo "PHASE 3 FAILED - CHECK LOGS"
+        exit 1
+      fi
+    fi
