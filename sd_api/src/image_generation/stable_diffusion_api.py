@@ -23,9 +23,12 @@ from tqdm import tqdm
 import json
 import requests
 import re
+from datetime import datetime
+from typing import Optional
 
 from config import config
 from auth import verify_api_key, verify_admin_key
+from core.buffer_class import Model_Buffer
 
 sd_paths = {
     'SD 1.5': "runwayml/stable-diffusion-v1-5",
@@ -42,19 +45,40 @@ def prep_name(string):
     return re.sub(r"[^a-z_0-9]", '', string.lower())
 
 
-class DiffusionModel:
+class DiffusionModel(Model_Buffer):
 
     schedulers = {
         'euler': EulerDiscreteScheduler
     }
-    def __init__(self, model_id: str = "runwayml/stable-diffusion-v1-5"):
+    def __init__(self, model_id: str = "runwayml/stable-diffusion-v1-5", timeout: int = 600):
+        # Initialize buffer (sets self.model, self.pipeline, etc. to None)
+        super().__init__()
+
         self.loaded_lora = None
         self.config = {'torch_dtype': torch.float16}
         self.type = 'prompt2img'
         self.model_id = None
-        self.set_model({'model_id': model_id,
-                        'type': 'prompt2img'})
+        self.loaded_pipeline = None
+
+        # Load model with timeout (10 minutes default for slow SD models)
+        self.load_model(model_id=model_id, timeout=timeout)
         self.load_implemented_loras()
+
+    def load_model(self, model_id: str = None, timeout: int = 600, **kwargs):
+        """Load the diffusion model with automatic unloading after timeout."""
+        # Set up timer using parent's load_model
+        super().load_model(timeout=timeout)
+
+        # Load the pipeline
+        if model_id:
+            self.model_id = model_id
+
+        self.set_model({'model_id': self.model_id, 'type': 'prompt2img'})
+        self.loaded_at = datetime.now()
+
+        # Start timer if configured
+        if self.timer:
+            self.timer.start()
 
     def add_new_lora(self, lora_name):
         search_progress = ''
@@ -252,6 +276,9 @@ class DiffusionModel:
         return images
 
     def gen_image(self, prompt, config):
+        # Reset timer on each image generation
+        self.reset_timer()
+
         n = config['count_returned']
         negative_prompt = config['prompt_config']['negative_prompt']
         del config['prompt_config']['negative_prompt']
@@ -404,6 +431,12 @@ async def add_new_lora(name: str, api_key: str = Depends(verify_admin_key)):
     """Add a new LORA model from Civitai (admin only)."""
     answer = model.add_new_lora(name)
     return answer
+
+
+@router.get("/buffer_status/")
+async def get_buffer_status(api_key: str = Depends(verify_api_key)):
+    """Get current buffer status for debugging."""
+    return model.get_status()
 
 
 app.include_router(router)
