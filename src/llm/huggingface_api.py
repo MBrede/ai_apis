@@ -1,8 +1,24 @@
 """
-gunicorn huggingface_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 -t 30000
+HuggingFace LLM API for image prompt generation using Mixtral-8x7B.
+
+This module provides a FastAPI server for running the Mixtral-8x7B-Instruct model
+with 4-bit quantization for efficient inference. It specializes in generating
+detailed image descriptions for stable diffusion models.
+
+To start the API:
+    gunicorn huggingface_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 -t 30000
+
+Note: This uses an older LLM model (Mixtral-8x7B-Instruct-v0.1) and may benefit
+from upgrading to newer versions for improved performance and capabilities.
 """
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, TextStreamer, BitsAndBytesConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    TextStreamer,
+    BitsAndBytesConfig,
+)
 from typing import Union
 from fastapi import FastAPI, APIRouter
 from pydantic import BaseModel
@@ -12,9 +28,29 @@ import os
 
 load_dotenv()
 
-class LLM:
 
-    def __init__(self):
+class LLM:
+    """
+    Large Language Model wrapper for Mixtral-8x7B with prompt generation capabilities.
+
+    This class loads and manages the Mixtral-8x7B-Instruct model with 4-bit quantization
+    for memory-efficient inference. It provides methods for generating image descriptions
+    and general text generation.
+
+    Attributes:
+        model: The loaded Mixtral model with 4-bit quantization
+        tokenizer: HuggingFace tokenizer for the model
+        generation_config: Configuration for text generation parameters
+        streamer: Text streamer for real-time output
+        prompt_template: Template for generating image descriptions
+    """
+
+    def __init__(self) -> None:
+        """
+        Initialize the LLM with Mixtral-8x7B model and 4-bit quantization.
+
+        Requires HF_TOKEN environment variable for model access.
+        """
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
@@ -70,11 +106,34 @@ class LLM:
             "Based on the given text '{text}', create a similarly detailed image description."
         )
 
-    def __call__(self, text):
+    def __call__(self, text: str) -> str:
+        """
+        Generate an image description from input text.
+
+        Args:
+            text: Input text to convert into an image description
+
+        Returns:
+            str: Generated image description suitable for stable diffusion
+        """
         messages = {"role": "user", "prompt": self.prompt_template.format(text=text)}
         return self.generate_naked(**messages)
 
-    def generate_naked(self, prompt, role: str = None, temp: float = 0.3, max_new_tokens=500):
+    def generate_naked(
+        self, prompt: str, role: str | None = None, temp: float = 0.3, max_new_tokens: int = 500
+    ) -> str:
+        """
+        Generate text from a prompt without template formatting.
+
+        Args:
+            prompt: The input prompt
+            role: Optional role prefix for the prompt
+            temp: Temperature for generation (0.0-1.0), default 0.3
+            max_new_tokens: Maximum number of tokens to generate, default 500
+
+        Returns:
+            str: Generated text response
+        """
         prompt = f"{role} USER: {prompt} ASSISTANT:"
         input_tokens = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         self.generation_config.temperature = temp
@@ -91,25 +150,61 @@ router = APIRouter()
 
 
 @router.get("/llm_prompt_assistance")
-async def llm_prompt_assistance(text: str):
+async def llm_prompt_assistance(text: str) -> str:
+    """
+    Generate a detailed image description for stable diffusion.
+
+    Args:
+        text: Input text to convert into an image description
+
+    Returns:
+        str: Formatted image description with emphasis weights
+    """
     return llm(text)
 
 
 @router.get("/llm_interface")
-async def llm_interface(text: str, role: str = None, temp: float = .3):
+async def llm_interface(text: str, role: str | None = None, temp: float = 0.3) -> str:
+    """
+    Generate text using the LLM without specific formatting.
+
+    Args:
+        text: Input prompt text
+        role: Optional role/system prompt
+        temp: Temperature for generation (0.0-1.0)
+
+    Returns:
+        str: Generated text response
+    """
     return llm.generate_naked(prompt=text, role=role, temp=temp)
 
 
 class Item(BaseModel):
-    system: str | None = 'Du bist ein hilfreicher Assistent.'
-    messages: str | None = 'Erzähl mir eine Geschichte über Schnabeltiere und Data Science.'
+    """Request model for structured LLM queries."""
+
+    system: str | None = "Du bist ein hilfreicher Assistent."
+    messages: str | None = "Erzähl mir eine Geschichte über Schnabeltiere und Data Science."
     temperature: float | None = 0.1
     max_tokens: int | None = 500
 
 
 @router.post("/answer/")
-def get_answer(item: Item):
-    answer = llm.generate_naked(prompt=item.message, role=item.system, temp=item.temperature, max_new_tokens=item.max_tokens)
+def get_answer(item: Item) -> dict[str, str]:
+    """
+    Generate a response using the LLM with system and user messages.
+
+    Args:
+        item: Request containing system prompt, user message, and generation parameters
+
+    Returns:
+        dict: Response containing the generated message
+    """
+    answer = llm.generate_naked(
+        prompt=item.messages,
+        role=item.system,
+        temp=item.temperature,
+        max_new_tokens=item.max_tokens,
+    )
     return {"message": answer}
 
 

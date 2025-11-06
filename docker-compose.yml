@@ -1,0 +1,163 @@
+version: '3.8'
+
+services:
+  # MongoDB for authentication and bot settings
+  mongodb:
+    image: mongo:7.0
+    container_name: ai_apis_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+      MONGO_INITDB_DATABASE: ai_apis
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    ports:
+      - "27017:27017"
+    networks:
+      - ai_apis_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Stable Diffusion API
+  stable_diffusion:
+    build:
+      context: .
+      dockerfile: Dockerfile.stable_diffusion
+    container_name: ai_apis_stable_diffusion
+    restart: unless-stopped
+    environment:
+      - API_KEY=${API_KEY:-your-api-key-here}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-your-admin-key-here}
+      - HF_TOKEN=${HF_TOKEN}
+      - CIVIT_KEY=${CIVIT_KEY}
+      - USE_MONGODB=${USE_MONGODB:-true}
+      - MONGODB_URL=mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/
+      - MONGODB_DB=ai_apis
+    volumes:
+      - ./loras:/app/loras
+      - ./models:/app/models
+      - sd_cache:/root/.cache
+    ports:
+      - "1234:1234"
+    networks:
+      - ai_apis_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # Whisper API
+  whisper:
+    build:
+      context: .
+      dockerfile: Dockerfile.whisper
+    container_name: ai_apis_whisper
+    restart: unless-stopped
+    environment:
+      - API_KEY=${API_KEY:-your-api-key-here}
+      - HF_TOKEN=${HF_TOKEN}
+      - DEFAULT_WHISPER_MODEL=${DEFAULT_WHISPER_MODEL:-turbo}
+      - USE_MONGODB=${USE_MONGODB:-true}
+      - MONGODB_URL=mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/
+      - MONGODB_DB=ai_apis
+    volumes:
+      - whisper_cache:/root/.cache
+    ports:
+      - "8080:8080"
+    networks:
+      - ai_apis_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # Text Classification API (includes sentiment analysis)
+  text_classification:
+    build:
+      context: .
+      dockerfile: Dockerfile.text_analysis
+    container_name: ai_apis_text_classification
+    restart: unless-stopped
+    environment:
+      - API_KEY=${API_KEY:-your-api-key-here}
+      - USE_MONGODB=${USE_MONGODB:-true}
+      - MONGODB_URL=mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/
+      - MONGODB_DB=ai_apis
+    volumes:
+      - classifier_cache:/root/.cache
+    ports:
+      - "8000:8000"
+    networks:
+      - ai_apis_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # Telegram Bot
+  telegram_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: ai_apis_telegram_bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - API_KEY=${API_KEY:-your-api-key-here}
+      - OLLAMA_HOST=${OLLAMA_HOST:-149.222.209.66}
+      - OLLAMA_PORT=${OLLAMA_PORT:-2345}
+      - SD_HOST=${SD_HOST:-stable_diffusion}
+      - SD_PORT=${SD_PORT:-1234}
+      - WHISPER_HOST=${WHISPER_HOST:-whisper}
+      - WHISPER_PORT=${WHISPER_PORT:-8080}
+      - USE_MONGODB=${USE_MONGODB:-true}
+      - MONGODB_URL=mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/
+      - MONGODB_DB=ai_apis
+    networks:
+      - ai_apis_network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      stable_diffusion:
+        condition: service_started
+      whisper:
+        condition: service_started
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  sd_cache:
+    driver: local
+  whisper_cache:
+    driver: local
+  classifier_cache:
+    driver: local
+
+networks:
+  ai_apis_network:
+    driver: bridge

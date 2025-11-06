@@ -1,0 +1,42 @@
+# Stable Diffusion API Docker image
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.12 \
+    python3.12-dev \
+    python3-pip \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+
+WORKDIR /app
+
+# Copy and install dependencies
+COPY pyproject.toml /app/
+RUN pip install --upgrade pip && pip install -e "/app[stable-diffusion]"
+
+# Copy source code
+COPY src/core/ /app/src/core/
+COPY src/image_generation/ /app/src/image_generation/
+COPY .env.example /app/.env
+
+# Create directories for models and loras
+RUN mkdir -p /app/loras /app/models
+
+# Expose port
+EXPOSE 1234
+
+# Run the API
+CMD ["gunicorn", "src.image_generation.stable_diffusion_api:app", \
+     "--workers", "1", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:1234", \
+     "--timeout", "300"]

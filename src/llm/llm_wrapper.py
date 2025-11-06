@@ -43,7 +43,11 @@ def ask_model(item = Item):
     if item.temperature == 0:
         item.temperature = 1e-5
     model = available_endpoints.get('LLM').get(item.API)
-    address = f"http://{model.get('IP','149.222.209.66')}:{model.get('Port','8080')}/answer"
+    if model is None:
+        raise HTTPException(404, detail=f"Model {item.API} not found in configuration")
+    if 'IP' not in model or 'Port' not in model:
+        raise HTTPException(500, detail=f"Model {item.API} missing IP or Port in configuration")
+    address = f"http://{model['IP']}:{model['Port']}/answer"
     response = requests.post(address,
                              json={'system': item.instruction,
                                    'messages': item.input,
@@ -55,9 +59,13 @@ def ask_model(item = Item):
 
 def ask_for_json(json_request: JSON_request):
     model = available_endpoints.get('LLM').get(json_request.API)
-    if model is None or model.get("Unsloth", True):
-        return HTTPException(406, detail=f"Error: model is Unsloth or not available")
-    address = f"http://{model.get('IP', '149.222.209.66')}:{model.get('Port', '8080')}/json_answer"
+    if model is None:
+        raise HTTPException(404, detail=f"Model {json_request.API} not found in configuration")
+    if model.get("Unsloth", True):
+        raise HTTPException(406, detail=f"Model {json_request.API} is Unsloth-based and does not support JSON mode")
+    if 'IP' not in model or 'Port' not in model:
+        raise HTTPException(500, detail=f"Model {json_request.API} missing IP or Port in configuration")
+    address = f"http://{model['IP']}:{model['Port']}/json_answer"
     response = requests.post(address,
                              json={'prompt': json_request.prompt,
                                    'input': json_request.input,

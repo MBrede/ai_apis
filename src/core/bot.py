@@ -1,39 +1,184 @@
+"""
+Telegram bot for AI services (SD, LLM, audio transcription).
+
+Provides a user-friendly interface to AI APIs including image generation,
+text generation with OLLAMA, and audio transcription.
+Supports MongoDB for persistent user settings storage.
+"""
+
 import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackContext, MessageHandler, filters
-import dotenv
 import os
 import datetime
 import requests
 from io import BytesIO
 import tempfile
+import logging
+from src.core.config import config
+from src.core.database import get_mongo_db
 
-dotenv.load_dotenv('.env')
-API_ENDPOINT = "http://149.222.209.100:1234"
-BOT_TOKEN = os.environ["telegram_token"]
-try:
-    with open('users.json', 'r') as f:
-        USERS = json.load(f)
-except FileNotFoundError:
-    USERS = {}
+logger = logging.getLogger(__name__)
 
-try:
-    with open('contacts.json', 'r') as f:
-        CONTACTS = json.load(f)
-except FileNotFoundError:
-    CONTACTS = {}
+# Load configuration
+SD_ENDPOINT = config.SD_URL
+OLLAMA_ENDPOINT = config.OLLAMA_URL
+WHISPER_ENDPOINT = config.WHISPER_URL
+BOT_TOKEN = config.TELEGRAM_TOKEN
+
+if not BOT_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN not set in environment variables!")
+
+
+def load_users_from_mongodb():
+    """Load all users from MongoDB into memory."""
+    db = get_mongo_db()
+    if db is None:
+        return {}
+
+    try:
+        users_collection = db.bot_users
+        users = {}
+        for user_doc in users_collection.find():
+            user_id = user_doc['user_id']
+            users[user_id] = {
+                'admin': user_doc.get('admin', False),
+                'mode': user_doc.get('mode', 'sd'),
+                'current_settings': user_doc.get('current_settings', {})
+            }
+        logger.info(f"Loaded {len(users)} users from MongoDB")
+        return users
+    except Exception as e:
+        logger.error(f"Error loading users from MongoDB: {e}")
+        return {}
+
+
+def save_user_to_mongodb(user_id, user_data):
+    """Save a single user's data to MongoDB."""
+    db = get_mongo_db()
+    if db is None:
+        return False
+
+    try:
+        users_collection = db.bot_users
+        users_collection.update_one(
+            {'user_id': user_id},
+            {
+                '$set': {
+                    'user_id': user_id,
+                    'admin': user_data.get('admin', False),
+                    'mode': user_data.get('mode', 'sd'),
+                    'current_settings': user_data.get('current_settings', {}),
+                    'updated_at': datetime.datetime.utcnow()
+                }
+            },
+            upsert=True
+        )
+        logger.debug(f"Saved user {user_id} to MongoDB")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving user {user_id} to MongoDB: {e}")
+        return False
+
+
+def load_contacts_from_mongodb():
+    """Load contact attempts from MongoDB."""
+    db = get_mongo_db()
+    if db is None:
+        return {}
+
+    try:
+        contacts_collection = db.bot_contacts
+        contacts = {}
+        for contact_doc in contacts_collection.find():
+            user_id = contact_doc['user_id']
+            contacts[user_id] = contact_doc['last_attempt']
+        logger.info(f"Loaded {len(contacts)} contacts from MongoDB")
+        return contacts
+    except Exception as e:
+        logger.error(f"Error loading contacts from MongoDB: {e}")
+        return {}
+
+
+def save_contact_to_mongodb(user_id, timestamp):
+    """Save a contact attempt to MongoDB."""
+    db = get_mongo_db()
+    if db is None:
+        return False
+
+    try:
+        contacts_collection = db.bot_contacts
+        contacts_collection.update_one(
+            {'user_id': user_id},
+            {
+                '$set': {
+                    'user_id': user_id,
+                    'last_attempt': timestamp
+                }
+            },
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error saving contact for {user_id}: {e}")
+        return False
+
+
+# Load users and contacts
+if config.USE_MONGODB:
+    logger.info("Loading bot data from MongoDB...")
+    USERS = load_users_from_mongodb()
+    CONTACTS = load_contacts_from_mongodb()
+else:
+    logger.info("MongoDB disabled, using JSON files...")
+    try:
+        with open('users.json', 'r') as f:
+            USERS = json.load(f)
+    except FileNotFoundError:
+        USERS = {}
+
+    try:
+        with open('contacts.json', 'r') as f:
+            CONTACTS = json.load(f)
+    except FileNotFoundError:
+        CONTACTS = {}
 
 
 def save_users():
+    """Save all users to JSON file and optionally MongoDB."""
+    # Always save to JSON as backup
     with open('users.json', 'w') as f:
         json.dump(USERS, f, indent=4)
 
+    # Also save to MongoDB if enabled
+    if config.USE_MONGODB:
+        for user_id, user_data in USERS.items():
+            save_user_to_mongodb(user_id, user_data)
+
+
+def save_single_user(user_id):
+    """Save a single user to both JSON and MongoDB (more efficient)."""
+    # Update JSON file
+    save_users()
+
+    # Save to MongoDB if enabled
+    if config.USE_MONGODB and user_id in USERS:
+        save_user_to_mongodb(user_id, USERS[user_id])
+
 
 def update_contact_attempts(user_id):
+    """Record a contact attempt from unauthorized user."""
     global CONTACTS
-    CONTACTS[user_id] = str(datetime.datetime.now())
+    timestamp = str(datetime.datetime.now())
+    CONTACTS[user_id] = timestamp
+
+    # Save to JSON
     with open('contacts.json', 'w') as f:
         json.dump(CONTACTS, f, indent=4)
+
+    # Save to MongoDB if enabled
+    if config.USE_MONGODB:
+        save_contact_to_mongodb(user_id, timestamp)
 
 
 base_settings = {
@@ -132,8 +277,9 @@ async def message_handler(update: Update, context: CallbackContext) -> None:
 
 # Handler for text prompts
 async def handle_text_prompt(prompt, update, context, settings):
+    """Generate image from text prompt using Stable Diffusion API."""
     await update.message.reply_text("Generating image based on the prompt:\n" + prompt)
-    url = f"{API_ENDPOINT}/post_config?" + '&'.join([f'{k}={settings[k]}' for k in settings]) + f"&prompt={prompt}"
+    url = f"{SD_ENDPOINT}/post_config?" + '&'.join([f'{k}={settings[k]}' for k in settings]) + f"&prompt={prompt}"
     response = requests.post(url)
     if response.status_code == 200:
         image_stream = BytesIO(response.content)
@@ -145,10 +291,11 @@ async def handle_text_prompt(prompt, update, context, settings):
 
 # Handler for photo prompts
 async def handle_photo_prompt(photo, prompt, update, context, settings):
+    """Generate image from image+prompt using Stable Diffusion img2img."""
     photo_file = await context.bot.get_file(photo.file_id)
     photo_bytes = await photo_file.download_as_bytearray()
     files = {'image': ('image.jpg', photo_bytes, 'multipart/form-data', {'Expires': '0'})}
-    url = f"{API_ENDPOINT}/post_config?" + f"prompt={prompt}&" + '&'.join([f'{k}={settings[k]}' for k in settings])
+    url = f"{SD_ENDPOINT}/post_config?" + f"prompt={prompt}&" + '&'.join([f'{k}={settings[k]}' for k in settings])
     response = requests.post(url, files=files)
     if response.status_code == 200:
         image_stream = BytesIO(response.content)
@@ -159,12 +306,13 @@ async def handle_photo_prompt(photo, prompt, update, context, settings):
 
 
 async def add_admin(update: Update, context: CallbackContext) -> None:
+    """Grant admin privileges to a user (admin only)."""
     privileges = await check_privileges(update, admin_function=True)
     if privileges == 2 and context.args:
         new_admin_id = context.args[0]
         if new_admin_id in USERS:
             USERS[new_admin_id]["admin"] = True
-            save_users()
+            save_single_user(new_admin_id)  # Save to MongoDB if enabled
             await update.message.reply_text(f"User {new_admin_id} has been granted admin status.")
         else:
             await update.message.reply_text("User ID not found.")
@@ -173,18 +321,20 @@ async def add_admin(update: Update, context: CallbackContext) -> None:
 
 
 async def remove_admin(update: Update, context: CallbackContext) -> None:
+    """Revoke admin privileges from a user (admin only)."""
     privileges = await check_privileges(update, admin_function=True)
     if privileges == 2 and context.args:
         admin_id = context.args[0]
         if admin_id in USERS and USERS[admin_id]["admin"]:
             USERS[admin_id]["admin"] = False
-            save_users()
+            save_single_user(admin_id)  # Save to MongoDB if enabled
             await update.message.reply_text(f"Admin status removed from user {admin_id}.")
         else:
             await update.message.reply_text("User ID not found or user is not an admin.")
 
 
 async def change_mode(update: Update, context: CallbackContext) -> None:
+    """Switch between SD (Stable Diffusion) and LLM mode."""
     privileges = await check_privileges(update, admin_function=False)
     if privileges >= 1:
         user_id = str(update.effective_user.id)
@@ -193,17 +343,18 @@ async def change_mode(update: Update, context: CallbackContext) -> None:
                 USERS[user_id]["mode"] = "llm"
             else:
                 USERS[user_id]["mode"] = "sd"
-            save_users()
+            save_single_user(user_id)  # Save to MongoDB if enabled
         await update.message.reply_text(f"You are now in {USERS[user_id]['mode']} mode.")
 
 async def add_user(update: Update, context: CallbackContext) -> None:
+    """Add a new user to the bot (admin only)."""
     privileges = await check_privileges(update, admin_function=True)
     if privileges == 2 and context.args:
         new_user_id = context.args[0]
         USERS[new_user_id] = {"admin": False,
                               "mode": "sd",
-                              "current_settings": base_settings}  # default new users as non-admin
-        save_users()
+                              "current_settings": base_settings.copy()}  # default new users as non-admin
+        save_single_user(new_user_id)  # Save to MongoDB if enabled
         await update.message.reply_text(f"User {new_user_id} added to the system.")
     else:
         await update.message.reply_text("You do not have permission to perform this action.")
@@ -242,11 +393,12 @@ async def list_contacts(update: Update, context: CallbackContext) -> None:
 
 
 async def add_lora(update: Update, context: CallbackContext) -> None:
+    """Add a new LORA model (admin only)."""
     privileges = await check_privileges(update, admin_function=True)
     if privileges == 2:
         if context.args:
             lora_name = ' '.join(context.args)
-            response = requests.post(f"{API_ENDPOINT}/add_new_lora?name={lora_name}")
+            response = requests.post(f"{SD_ENDPOINT}/add_new_lora?name={lora_name}")
             if response.ok:
                 await update.message.reply_text(f"LORA model '{lora_name}' added successfully."
                                                 f"API responded: {response.content}")
@@ -272,10 +424,10 @@ async def get_parameters(update: Update, context: CallbackContext) -> None:
 
 
 async def get_loras(update: Update, context: CallbackContext) -> None:
-    """ Fetches and displays the list of available LORA models from the API. """
+    """Fetch and display available LORA models."""
     privileges = await check_privileges(update)
     if privileges:
-        response = requests.get(f"{API_ENDPOINT}/get_available_loras")
+        response = requests.get(f"{SD_ENDPOINT}/get_available_loras")
         if response.status_code == 200:
             loras = response.json()
             loras_text = "Available LORAs:\n"
@@ -290,10 +442,10 @@ async def get_loras(update: Update, context: CallbackContext) -> None:
 
 
 async def get_sd(update: Update, context: CallbackContext) -> None:
-    """ Fetches and displays the list of available stable diffusion models. """
+    """Fetch and display available Stable Diffusion models."""
     privileges = await check_privileges(update)
     if privileges:
-        response = requests.get(f"{API_ENDPOINT}/get_available_stable_diffs")
+        response = requests.get(f"{SD_ENDPOINT}/get_available_stable_diffs")
         if response.status_code == 200:
             sd_models = response.json()
             sd_text = "Available Stable Diffusion Models:\n" + '\n'.join(sd_models.values())
@@ -330,28 +482,54 @@ async def set_parameters(update: Update, context: CallbackContext) -> None:
                     return
         if changes:
             USERS[user_id]['current_settings'] = current_settings
-            save_users()
+            save_single_user(user_id)  # Save to MongoDB if enabled
             await update.message.reply_text("Changes made:\n" + '\n'.join(changes))
         else:
             await update.message.reply_text("No valid parameters provided.")
 
 
 async def llm_handler(update: Update, context: CallbackContext) -> None:
+    """Handle LLM text generation using OLLAMA."""
     privileges = await check_privileges(update)
     if privileges:
         text = update.message.text
         if not text:
             await update.message.reply_text("Please provide some text for the LLM interface.")
             return
-        response = requests.get(f"{API_ENDPOINT}/llm_interface", params={"text": text})
-        if response.status_code == 200:
-            generated_text = response.text
-            await update.message.reply_text(generated_text)
-        else:
-            await update.message.reply_text("Failed to generate response from LLM.")
+
+        try:
+            # OLLAMA API format
+            response = requests.post(
+                f"{OLLAMA_ENDPOINT}/api/generate",
+                json={
+                    "model": config.OLLAMA_MODEL,
+                    "prompt": text,
+                    "stream": False,
+                    "options": {
+                        "temperature": config.OLLAMA_TEMPERATURE,
+                        "num_predict": config.OLLAMA_MAX_TOKENS,
+                    }
+                },
+                timeout=config.REQUEST_TIMEOUT
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                generated_text = result.get("response", "")
+                if generated_text:
+                    await update.message.reply_text(generated_text)
+                else:
+                    await update.message.reply_text("LLM returned empty response.")
+            else:
+                await update.message.reply_text(f"Failed to generate response from LLM. Status: {response.status_code}")
+        except requests.exceptions.Timeout:
+            await update.message.reply_text("Request timed out. Please try again.")
+        except Exception as e:
+            await update.message.reply_text(f"Error: {str(e)}")
 
 
 async def assist_handler(update: Update, context: CallbackContext) -> None:
+    """Generate image prompt assistance using OLLAMA."""
     privileges = await check_privileges(update)
     if privileges:
         text = ' '.join(context.args)
@@ -359,38 +537,101 @@ async def assist_handler(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text("Please provide some text for prompt assistance.")
             return
         await update.message.reply_text("Generating answer...")
-        response = requests.get(f"{API_ENDPOINT}/llm_prompt_assistance", params={"text": text})
-        if response.status_code == 200:
-            prompt_description = response.text.split('Description:')[-1][:-1]
-            await update.message.reply_text(prompt_description)
-        else:
-            await update.message.reply_text("Failed to get prompt assistance from LLM.")
+
+        # Craft a system prompt for image prompt generation
+        system_prompt = """You are an expert at creating detailed Stable Diffusion prompts.
+Convert the given text into a vivid, detailed image description suitable for AI image generation.
+Include specific elements like setting, mood, style, and use emphasis notation like (keyword:1.3) for important parts.
+Start your response with 'Description:' followed by the detailed prompt."""
+
+        try:
+            response = requests.post(
+                f"{OLLAMA_ENDPOINT}/api/generate",
+                json={
+                    "model": config.OLLAMA_MODEL,
+                    "prompt": f"{system_prompt}\n\nUser text: {text}\n\nDescription:",
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.7,
+                        "num_predict": 500,
+                    }
+                },
+                timeout=config.REQUEST_TIMEOUT
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                generated_text = result.get("response", "")
+                # Extract description part if present
+                if "Description:" in generated_text:
+                    prompt_description = generated_text.split('Description:')[-1].strip()
+                else:
+                    prompt_description = generated_text.strip()
+
+                await update.message.reply_text(prompt_description)
+            else:
+                await update.message.reply_text("Failed to get prompt assistance from LLM.")
+        except Exception as e:
+            await update.message.reply_text(f"Error generating prompt: {str(e)}")
 
 
 async def assist_creator(update: Update, context: CallbackContext) -> None:
+    """Generate image prompt with OLLAMA and create image."""
     privileges = await check_privileges(update)
     if privileges:
         text = ' '.join(context.args)
         if not text:
             await update.message.reply_text("Please provide some text for prompt assistance.")
             return
-        await update.message.reply_text("Generating answer...")
-        response = requests.get(f"{API_ENDPOINT}/llm_prompt_assistance", params={"text": text})
-        if response.status_code == 200:
-            prompt = response.text.split('Description:')[-1][:-1]
-            user_id = str(update.effective_user.id)
-            current_settings = USERS[user_id]['current_settings']
-            await handle_text_prompt(prompt, update, context, current_settings)
-        else:
-            await update.message.reply_text("Failed to get prompt assistance from LLM.")
+        await update.message.reply_text("Generating prompt and image...")
+
+        # Craft a system prompt for image prompt generation
+        system_prompt = """You are an expert at creating detailed Stable Diffusion prompts.
+Convert the given text into a vivid, detailed image description suitable for AI image generation.
+Include specific elements like setting, mood, style, and use emphasis notation like (keyword:1.3) for important parts.
+Start your response with 'Description:' followed by the detailed prompt."""
+
+        try:
+            response = requests.post(
+                f"{OLLAMA_ENDPOINT}/api/generate",
+                json={
+                    "model": config.OLLAMA_MODEL,
+                    "prompt": f"{system_prompt}\n\nUser text: {text}\n\nDescription:",
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.7,
+                        "num_predict": 500,
+                    }
+                },
+                timeout=config.REQUEST_TIMEOUT
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                generated_text = result.get("response", "")
+                # Extract description part if present
+                if "Description:" in generated_text:
+                    prompt = generated_text.split('Description:')[-1].strip()
+                else:
+                    prompt = generated_text.strip()
+
+                user_id = str(update.effective_user.id)
+                current_settings = USERS[user_id]['current_settings']
+                await handle_text_prompt(prompt, update, context, current_settings)
+            else:
+                await update.message.reply_text("Failed to get prompt assistance from LLM.")
+        except Exception as e:
+            await update.message.reply_text(f"Error: {str(e)}")
 
 async def img2prompt_handler(update: Update, context: CallbackContext, photo) -> None:
+    """Generate text description from image using UniDiffuser."""
     privileges = await check_privileges(update)
     if privileges:
         photo_file = await context.bot.get_file(photo.file_id)
         photo_bytes = await photo_file.download_as_bytearray()
         files = {'image': ('image.jpg', BytesIO(photo_bytes), 'image/jpeg')}
-        url = f"{API_ENDPOINT[:-4]}8000/img2prompt"
+        # UniDiffuser endpoint (different port from SD)
+        url = f"{SD_ENDPOINT.replace(':8000', ':8001')}/img2prompt"
         response = requests.post(url, files=files)
         if response.status_code == 200:
             prompt_text = response.text
@@ -399,17 +640,18 @@ async def img2prompt_handler(update: Update, context: CallbackContext, photo) ->
             await update.message.reply_text("Failed to generate text from image.")
 
 async def audio_transcription(update: Update, context: CallbackContext, sound) -> None:
+    """Transcribe audio using Whisper API."""
     privileges = await check_privileges(update)
     if privileges:
         await update.message.reply_text(f"Transcribing {sound.duration}s long audio.")
         if 'audio' in sound.mime_type:
             file = await context.bot.get_file(sound.file_id)
             audio_bytes = await file.download_as_bytearray()
-            with tempfile.NamedTemporaryFile(delete=False, 
+            with tempfile.NamedTemporaryFile(delete=False,
                                              suffix=sound.mime_type.split('/')[1]) as tmp:
-                tmp.write(audio_bytes) 
+                tmp.write(audio_bytes)
                 files = { 'file': (tmp.name, open(tmp.name, 'rb'), sound.mime_type)}
-                url = "http://149.222.209.100:8080/transcribe?model_to_use=turbo"
+                url = f"{WHISPER_ENDPOINT}/transcribe?model_to_use=turbo"
                 response = requests.post(url, files=files)
                 
                 transcription = json.loads(response.text)['answer']
