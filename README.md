@@ -30,15 +30,22 @@ docker-compose up -d
 ```
 
 ### Manual Installation
+
+First, install uv (fast Python package installer):
 ```bash
-pip install -e ".[stable-diffusion,whisper,text-analysis,bot]"
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then install the package:
+```bash
+uv pip install -e ".[stable-diffusion,whisper,text-analysis,bot]"
 ```
 
 Install only what you need:
-- Bot only: `pip install -e ".[bot]"`
-- SD only: `pip install -e ".[stable-diffusion]"`
-- Whisper only: `pip install -e ".[whisper]"`
-- Text analysis only: `pip install -e ".[text-analysis]"`
+- Bot only: `uv pip install -e ".[bot]"`
+- SD only: `uv pip install -e ".[stable-diffusion]"`
+- Whisper only: `uv pip install -e ".[whisper]"`
+- Text analysis only: `uv pip install -e ".[text-analysis]"`
 
 ## Configuration
 
@@ -118,7 +125,7 @@ response = requests.post(
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 
 # Run all tests
 pytest
