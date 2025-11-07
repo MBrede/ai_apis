@@ -337,6 +337,32 @@ docker-compose config
 cat .env | grep -v "^#"
 ```
 
+### Build Fails with "OSError: Readme file does not exist"
+
+If you see this error during `docker build`:
+```
+OSError: Readme file does not exist: README.md
+```
+
+**Cause:** The `pyproject.toml` references `README.md` for package metadata, but the Dockerfile doesn't copy it before running `pip install`.
+
+**Solution:** Ensure your Dockerfile copies `README.md` along with `pyproject.toml`:
+
+```dockerfile
+# Copy and install dependencies
+COPY pyproject.toml README.md /app/
+RUN pip install --upgrade pip && pip install -e "/app[bot]"
+```
+
+This applies to all Dockerfiles:
+- `docker/Dockerfile.base`
+- `docker/Dockerfile.bot`
+- `docker/Dockerfile.stable_diffusion`
+- `docker/Dockerfile.text_analysis`
+- `docker/Dockerfile.whisper`
+
+**Note:** All Dockerfiles in this repository have been updated to include this fix.
+
 ## 📊 Monitoring
 
 ### Check Service Health
