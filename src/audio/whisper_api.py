@@ -113,12 +113,20 @@ class DiarizationBuffer(Model_Buffer):
 whisper_buffer = WhisperBuffer()
 diarization_buffer = DiarizationBuffer()
 
-# Initialize models
-whisper_buffer.load_model(config.DEFAULT_WHISPER_MODEL)
-diarization_buffer.load_model()
-
 app = FastAPI()
 router = APIRouter()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Load models during FastAPI startup (non-blocking for health checks)."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Starting model initialization...")
+    # Initialize models
+    whisper_buffer.load_model(config.DEFAULT_WHISPER_MODEL)
+    diarization_buffer.load_model()
+    logger.info("Model initialization complete")
 
 
 def diarize_audio(
@@ -230,12 +238,26 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffers are functioning.
-    Returns 200 OK when healthy, 503 Service Unavailable when unhealthy.
+    Returns 200 OK when healthy, 503 Service Unavailable when starting/unhealthy.
     """
     try:
-        # Test if buffers are accessible and working
+        # Check if models are still initializing
         whisper_status = whisper_buffer.get_status()
         diarization_status = diarization_buffer.get_status()
+
+        whisper_loaded = whisper_status.get("is_loaded", False) if whisper_status else False
+        diarization_loaded = diarization_status.get("is_loaded", False) if diarization_status else False
+
+        # If neither model is loaded yet, we're still starting
+        if not whisper_loaded and not diarization_loaded:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "starting",
+                    "service": "whisper-api",
+                    "message": "Models are loading, please wait...",
+                },
+            )
 
         # Check if we can access buffer attributes
         whisper_healthy = whisper_status is not None
@@ -247,10 +269,8 @@ async def health_check():
             "service": "whisper-api",
             "whisper_buffer_accessible": whisper_healthy,
             "diarization_buffer_accessible": diarization_healthy,
-            "whisper_model_loaded": whisper_status.get("is_loaded", False) if whisper_status else False,
-            "diarization_model_loaded": (
-                diarization_status.get("is_loaded", False) if diarization_status else False
-            ),
+            "whisper_model_loaded": whisper_loaded,
+            "diarization_model_loaded": diarization_loaded,
         }
 
         # Return 503 if unhealthy, 200 if healthy

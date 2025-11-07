@@ -122,7 +122,8 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffer is functioning.
-    Returns 200 OK when healthy, 503 Service Unavailable when unhealthy.
+    Returns 200 OK when healthy (ready to accept requests).
+    Note: Models are loaded on-demand, so model_loaded may be False but service is still healthy.
     """
     try:
         # Test if buffer is accessible and working
@@ -136,6 +137,7 @@ async def health_check():
             "service": "text-classification-api",
             "buffer_accessible": is_healthy,
             "model_loaded": buffer_status.get("is_loaded", False) if buffer_status else False,
+            "note": "Models load on first request" if not buffer_status.get("is_loaded", False) else None,
         }
 
         # Return 503 if unhealthy, 200 if healthy
