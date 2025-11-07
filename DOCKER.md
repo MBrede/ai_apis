@@ -39,12 +39,12 @@ This approach means:
 
 ```bash
 # Build and push to Docker Hub (requires Docker Hub account)
-./scripts/build_and_push_base.sh 1.0.0 yourdockerhubusername
+./scripts/build_and_push_base.sh 1.0.0 yourusername
 
 # The script will:
 # 1. Build the base image with system deps + common packages (api-core, ml-base)
 # 2. Tag it with version and 'latest'
-# 3. Push to Docker Hub: yourdockerhubusername/ai-apis-base:1.0.0
+# 3. Push to Docker Hub: yourusername/ai-apis-base:1.0.0
 # 4. Scan for vulnerabilities (if Trivy is installed)
 ```
 
@@ -53,10 +53,8 @@ This approach means:
 Once pushed, you can use the faster `.hub` Dockerfiles:
 
 ```bash
-# Update the FROM line in docker/Dockerfile.*.hub files with your username
-sed -i 's/yourusername/actualdockerhubusername/g' docker/Dockerfile.*.hub
-
 # Build services using the pre-built base (much faster!)
+# The .hub Dockerfiles are already configured to use mbrede/ai-apis-base:latest
 docker build -f docker/Dockerfile.stable_diffusion.hub -t ai_apis_sd:latest .
 docker build -f docker/Dockerfile.whisper.hub -t ai_apis_whisper:latest .
 docker build -f docker/Dockerfile.text_analysis.hub -t ai_apis_text:latest .

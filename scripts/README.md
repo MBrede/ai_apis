@@ -26,14 +26,14 @@ Builds and pushes the base Docker image to Docker Hub. This base image contains 
 
 ```bash
 # Build and push with version 1.0.0
-./scripts/build_and_push_base.sh 1.0.0 myusername
+./scripts/build_and_push_base.sh 1.0.0 yourusername
 
 # Build and push as latest using environment variable
-export DOCKERHUB_USERNAME=myusername
+export DOCKERHUB_USERNAME=yourusername
 ./scripts/build_and_push_base.sh
 
 # Build specific version
-./scripts/build_and_push_base.sh 1.2.3 myusername
+./scripts/build_and_push_base.sh 1.2.3 yourusername
 ```
 
 ### What It Does
@@ -78,7 +78,7 @@ FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 # Install everything...
 
 # Use:
-FROM myusername/ai-apis-base:latest
+FROM mbrede/ai-apis-base:latest
 # Base already has: Python, CUDA, uv, FastAPI, torch, numpy
 # Only install service-specific packages
 RUN uv pip install -e "/app[stable-diffusion-only]"
@@ -156,11 +156,11 @@ Recommended versioning:
 Example:
 ```bash
 # Production release
-./scripts/build_and_push_base.sh 1.0.0 myusername
+./scripts/build_and_push_base.sh 1.0.0 yourusername
 
 # Development build
-./scripts/build_and_push_base.sh dev myusername
+./scripts/build_and_push_base.sh dev yourusername
 
 # CI/CD with commit SHA
-./scripts/build_and_push_base.sh $(git rev-parse --short HEAD) myusername
+./scripts/build_and_push_base.sh $(git rev-parse --short HEAD) yourusername
 ```

@@ -3,11 +3,10 @@
 #
 # To use this Dockerfile:
 # 1. Build and push base image: ./scripts/build_and_push_base.sh 1.0.0 yourusername
-# 2. Update FROM line below with your Docker Hub username
-# 3. Build: docker build -f docker/Dockerfile.whisper.hub -t ai_apis_whisper:latest .
+# 2. Build: docker build -f docker/Dockerfile.whisper.hub -t ai_apis_whisper:latest .
 
-# Use pre-built base image from Docker Hub (update username)
-FROM yourusername/ai-apis-base:latest
+# Use pre-built base image from Docker Hub
+FROM mbrede/ai-apis-base:latest
 
 WORKDIR /app
 
