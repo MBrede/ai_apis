@@ -9,6 +9,7 @@ Usage:
     python scripts/init_mongodb.py
 """
 
+import sys
 import os
 from datetime import datetime
 from pymongo import MongoClient
