@@ -156,11 +156,11 @@ Recommended versioning:
 Example:
 ```bash
 # Production release
-./scripts/build_and_push_base.sh 1.0.0 mbrede
+./scripts/build_and_push_base.sh 1.0.0 yourusername
 
 # Development build
-./scripts/build_and_push_base.sh dev mbrede
+./scripts/build_and_push_base.sh dev yourusername
 
 # CI/CD with commit SHA
-./scripts/build_and_push_base.sh $(git rev-parse --short HEAD) mbrede
+./scripts/build_and_push_base.sh $(git rev-parse --short HEAD) yourusername
 ```
