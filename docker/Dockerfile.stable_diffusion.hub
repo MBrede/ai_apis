@@ -1,0 +1,35 @@
+# Stable Diffusion API Docker image using pre-built base from Docker Hub
+# Base image already contains: Python, CUDA, uv, system packages, api-core (FastAPI etc.), ml-base (torch, numpy)
+#
+# To use this Dockerfile:
+# 1. Build and push base image: ./scripts/build_and_push_base.sh 1.0.0 yourusername
+# 2. Update FROM line below with your Docker Hub username
+# 3. Build: docker build -f docker/Dockerfile.stable_diffusion.hub -t ai_apis_sd:latest .
+
+# Use pre-built base image from Docker Hub (update username)
+FROM yourusername/ai-apis-base:latest
+
+WORKDIR /app
+
+# Install only service-specific packages (base already has api-core and ml-base)
+# This installs: diffusers, transformers, accelerate, pillow, torchvision, tqdm
+COPY pyproject.toml README.md /app/
+RUN uv pip install -e "/app[stable-diffusion-only]"
+
+# Copy source code
+COPY src/core/ /app/src/core/
+COPY src/image_generation/ /app/src/image_generation/
+COPY .env.example /app/.env
+
+# Create directories for models and loras
+RUN mkdir -p /app/loras /app/models
+
+# Expose port
+EXPOSE 1234
+
+# Run the API
+CMD ["gunicorn", "src.image_generation.stable_diffusion_api:app", \
+     "--workers", "1", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:1234", \
+     "--timeout", "300"]

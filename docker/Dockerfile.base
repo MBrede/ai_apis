@@ -5,46 +5,47 @@ FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    UV_NO_CACHE=1 \
+    UV_SYSTEM_PYTHON=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3.12 \
     python3.12-dev \
-    python3-pip \
     ffmpeg \
     git \
     wget \
     curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Python 3.12 as default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 
-# Upgrade pip
-RUN python -m pip install --upgrade pip setuptools wheel
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:$PATH"
 
 # Create app directory
 WORKDIR /app
 
-# Copy requirements
+# Copy pyproject.toml and README.md for package installation
 COPY pyproject.toml README.md /app/
 
-# Install Python dependencies
-RUN pip install -e /app
+# Install common packages shared by all ML APIs:
+# - api-core: FastAPI, uvicorn, gunicorn, pydantic
+# - ml-base: torch, numpy
+# This allows ONE base image for ALL services with common heavy dependencies pre-installed.
+# Service-specific packages (transformers, diffusers, whisper, etc.) are installed per-service.
+RUN uv pip install -e "/app[api-core,ml-base]"
 
-# Copy source code
-COPY src/ /app/src/
-COPY .env.example /app/.env.example
-
-# Create non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
-
-USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/docs || exit 1
+# Base image now contains:
+# - System dependencies (Python, CUDA, uv, ffmpeg, git, etc.)
+# - Common API packages (FastAPI, uvicorn, gunicorn, pydantic)
+# - Common ML packages (torch, numpy)
+#
+# Service-specific Dockerfiles only need to install their unique packages:
+# - stable-diffusion: diffusers, transformers, accelerate, etc.
+# - whisper: openai-whisper, pyannote-audio, ffmpeg-python
+# - text-analysis: transformers, setfit, huggingface-hub

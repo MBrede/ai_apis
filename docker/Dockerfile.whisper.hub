@@ -1,0 +1,32 @@
+# Whisper API Docker image using pre-built base from Docker Hub
+# Base image already contains: Python, CUDA, uv, system packages, api-core (FastAPI etc.), ml-base (torch, numpy)
+#
+# To use this Dockerfile:
+# 1. Build and push base image: ./scripts/build_and_push_base.sh 1.0.0 yourusername
+# 2. Update FROM line below with your Docker Hub username
+# 3. Build: docker build -f docker/Dockerfile.whisper.hub -t ai_apis_whisper:latest .
+
+# Use pre-built base image from Docker Hub (update username)
+FROM yourusername/ai-apis-base:latest
+
+WORKDIR /app
+
+# Install only service-specific packages (base already has api-core and ml-base)
+# This installs: openai-whisper, pyannote-audio, ffmpeg-python
+COPY pyproject.toml README.md /app/
+RUN uv pip install -e "/app[whisper-only]"
+
+# Copy source code
+COPY src/core/ /app/src/core/
+COPY src/audio/ /app/src/audio/
+COPY .env.example /app/.env
+
+# Expose port
+EXPOSE 8080
+
+# Run the API
+CMD ["gunicorn", "src.audio.whisper_api:app", \
+     "--workers", "1", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:8080", \
+     "--timeout", "30000"]

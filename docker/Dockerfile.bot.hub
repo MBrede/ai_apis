@@ -1,5 +1,10 @@
-# Text Analysis APIs Docker image
-FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+# Telegram Bot Docker image using pre-built base from Docker Hub
+# This significantly speeds up builds by using a pre-built base image with system dependencies
+#
+# Note: Bot doesn't need GPU, so we use python:3.12-slim base instead
+# For consistency, you could create a separate CPU-only base image
+
+FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -9,15 +14,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    python3.12 \
-    python3.12-dev \
     git \
     wget \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -27,18 +28,11 @@ WORKDIR /app
 
 # Copy and install dependencies
 COPY pyproject.toml README.md /app/
-RUN uv pip install -e "/app[text-analysis]"
+RUN uv pip install -e "/app[bot]"
 
 # Copy source code
 COPY src/core/ /app/src/core/
-COPY src/text_analysis/ /app/src/text_analysis/
 COPY .env.example /app/.env
 
-# Expose port for classification API
-EXPOSE 8000
-
-# Run text classification API
-CMD ["gunicorn", "src.text_analysis.text_classification_api:app", \
-     "--workers", "1", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:8000"]
+# Run the bot
+CMD ["python", "-m", "src.core.bot"]
