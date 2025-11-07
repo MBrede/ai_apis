@@ -500,13 +500,18 @@ async def health_check():
     Returns 200 OK when healthy (ready to accept requests).
     Note: Models load on first request (lazy loading).
     """
+    logger.info("=== HEALTH CHECK STARTED ===")
     try:
         # Test if buffer is accessible and working
+        logger.info("Health check: About to call model.get_status()...")
         buffer_status = model.get_status()
+        logger.info(f"Health check: get_status() returned: {buffer_status}")
 
         # Check if we can access buffer attributes
+        logger.info("Health check: Checking if buffer is accessible...")
         is_healthy = buffer_status is not None
 
+        logger.info("Health check: Building response data...")
         response_data = {
             "status": "healthy" if is_healthy else "unhealthy",
             "service": "stable-diffusion-api",
@@ -515,12 +520,15 @@ async def health_check():
             "note": "Model will load on first request" if not buffer_status.get("is_loaded", False) else None,
         }
 
+        logger.info(f"Health check: Returning response: {response_data}")
         # Return 503 if unhealthy, 200 if healthy
         if not is_healthy:
             return JSONResponse(status_code=503, content=response_data)
+        logger.info("=== HEALTH CHECK COMPLETED SUCCESSFULLY ===")
         return response_data
 
     except Exception as e:
+        logger.error(f"Health check failed with exception: {e}", exc_info=True)
         return JSONResponse(
             status_code=503,
             content={

@@ -238,10 +238,16 @@ async def health_check():
     Returns 200 OK when healthy (ready to accept requests).
     Note: Models load on first request (lazy loading).
     """
+    logger.info("=== WHISPER HEALTH CHECK STARTED ===")
     try:
         # Check buffer status
+        logger.info("Whisper health check: About to call whisper_buffer.get_status()...")
         whisper_status = whisper_buffer.get_status()
+        logger.info(f"Whisper health check: whisper_buffer.get_status() returned: {whisper_status}")
+
+        logger.info("Whisper health check: About to call diarization_buffer.get_status()...")
         diarization_status = diarization_buffer.get_status()
+        logger.info(f"Whisper health check: diarization_buffer.get_status() returned: {diarization_status}")
 
         whisper_loaded = whisper_status.get("is_loaded", False) if whisper_status else False
         diarization_loaded = diarization_status.get("is_loaded", False) if diarization_status else False
@@ -261,12 +267,15 @@ async def health_check():
             "note": "Models will load on first request" if not (whisper_loaded and diarization_loaded) else None,
         }
 
+        logger.info(f"Whisper health check: Returning response: {response_data}")
         # Return 503 if unhealthy, 200 if healthy
         if not is_healthy:
             return JSONResponse(status_code=503, content=response_data)
+        logger.info("=== WHISPER HEALTH CHECK COMPLETED SUCCESSFULLY ===")
         return response_data
 
     except Exception as e:
+        logger.error(f"Whisper health check failed with exception: {e}", exc_info=True)
         return JSONResponse(
             status_code=503,
             content={
