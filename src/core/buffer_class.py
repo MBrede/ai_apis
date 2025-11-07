@@ -114,48 +114,32 @@ class Model_Buffer(ABC):
             }
 
     def unload_model(self) -> None:
-        """
-        Unload the model and free GPU memory.
-
-        Clears all model-related attributes, runs garbage collection,
-        empties the CUDA cache, and cancels any active timer. This method
-        is thread-safe and can be called from the timer thread or manually.
-
-        Note:
-            This method can be called automatically by the timer or manually.
-            It's safe to call multiple times.
-        """
         with self._lock:
             logger.info(f"{self.__class__.__name__}: Unloading model")
 
-            # Cancel timer if active
-            if self.timer is not None:
-                try:
-                    self.timer.cancel()
-                except Exception as e:
-                    logger.warning(f"Error canceling timer: {e}")
-                self.timer = None
+            timer_to_cancel = self.timer
+            self.timer = None
 
-            # Clear model references
             self.model = None
             self.pipeline = None
             self.tokenizer = None
             self.loaded_at = None
             self.last_accessed = None
 
-            # Force garbage collection
-            gc.collect()
-
-            # Clear CUDA cache if available (lazy import torch)
+        if timer_to_cancel is not None:
             try:
-                import torch
+                timer_to_cancel.cancel()
+            except Exception as e:
+                logger.warning(f"Error canceling timer: {e}")
 
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    logger.info("CUDA cache cleared")
-            except ImportError:
-                # torch not available, skip CUDA cache clearing
-                pass
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.info("CUDA cache cleared")
+        except ImportError:
+            pass
 
     def reset_timer(self, timeout: int | None = None) -> None:
         """
