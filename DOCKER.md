@@ -39,12 +39,12 @@ This approach means:
 
 ```bash
 # Build and push to Docker Hub (requires Docker Hub account)
-./scripts/build_and_push_base.sh 1.0.0 mbrede
+./scripts/build_and_push_base.sh 1.0.0 yourusername
 
 # The script will:
 # 1. Build the base image with system deps + common packages (api-core, ml-base)
 # 2. Tag it with version and 'latest'
-# 3. Push to Docker Hub: mbrede/ai-apis-base:1.0.0
+# 3. Push to Docker Hub: yourusername/ai-apis-base:1.0.0
 # 4. Scan for vulnerabilities (if Trivy is installed)
 ```
 
