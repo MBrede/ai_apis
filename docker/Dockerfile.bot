@@ -35,4 +35,4 @@ COPY src/core/ /app/src/core/
 COPY .env.example /app/.env
 
 # Run the bot
-CMD ["uv", "run", "src.core.bot"]
+CMD ["uv", "run", "src/core/bot.py"]
