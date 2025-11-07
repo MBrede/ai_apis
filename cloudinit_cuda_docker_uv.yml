@@ -10,6 +10,9 @@ packages:
   - make
   - python3-venv
   - lsb-release
+  - ca-certificates
+  - curl
+  - git
 
 write_files:
   - path: /etc/profile.d/cuda.sh
@@ -79,6 +82,7 @@ bootcmd:
       echo "=========================================="
       echo "STARTING CUDA INSTALLATION - PHASE 3"
       echo "Installing uv package manager"
+      echo "Installing docker"
       echo "=========================================="
 
       rm /var/tmp/reboot_flag_2
@@ -86,10 +90,23 @@ bootcmd:
       export HOME=/root
       curl -LsSf https://astral.sh/uv/install.sh | sh
 
+      sudo install -m 0755 -d /etc/apt/keyrings
+      sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      sudo apt-get update
+
+      sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
       if [ -f /root/.local/bin/uv ]; then
         curl -s https://gist.githubusercontent.com/MBrede/f1995c2a059fe269a92d2beadc62351f/raw/2aed46880e5c78f42e3c81cb6c330c0cebf01bf6/success.txt || echo "SUCCESS"
-        echo "ALL PHASES COMPLETE - CUDA READY!"
+        echo "ALL PHASES COMPLETE - Instance READY!"
         echo "uv installed at /root/.local/bin/uv"
+        echo "docker installed"
         echo "CUDA environment will be available after re-login"
         reboot
       else
