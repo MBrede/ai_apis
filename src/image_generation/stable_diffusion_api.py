@@ -6,9 +6,11 @@ To start the API:
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
+import threading
 from datetime import datetime
 from io import BytesIO
 
@@ -354,7 +356,10 @@ def image_grid(imgs):
     return grid
 
 
-model = None  # Initialize as None, load during startup
+logger = logging.getLogger(__name__)
+
+model = None  # Initialize as None, load in background
+model_loading = True  # Track if model is currently loading
 model_config = ["torch_dtype"]
 prompt_config = ["num_inference_steps", "guidance_scale", "negative_prompt"]
 
@@ -362,15 +367,27 @@ app = FastAPI()
 router = APIRouter()
 
 
+def load_model_background():
+    """Load model in background thread to avoid blocking server startup."""
+    global model, model_loading
+    try:
+        logger.info("Starting model initialization in background...")
+        model = DiffusionModel()
+        logger.info("Model initialization complete")
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+    finally:
+        model_loading = False
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Load model during FastAPI startup (non-blocking for health checks)."""
-    global model
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info("Starting model initialization...")
-    model = DiffusionModel()
-    logger.info("Model initialization complete")
+    """Start background model loading without blocking server startup."""
+    logger.info("Server starting - launching background model loader...")
+    # Start model loading in daemon thread so it doesn't block server startup
+    thread = threading.Thread(target=load_model_background, daemon=True)
+    thread.start()
+    logger.info("Background model loading started, server is ready for requests")
 
 
 class Item(BaseModel):
@@ -493,14 +510,15 @@ async def health_check():
     Returns 200 OK when healthy, 503 Service Unavailable when starting/unhealthy.
     """
     try:
-        # Check if model has been initialized
-        if model is None:
+        # Check if model is still loading
+        if model_loading or model is None:
             return JSONResponse(
                 status_code=503,
                 content={
                     "status": "starting",
                     "service": "stable-diffusion-api",
-                    "message": "Model is loading, please wait...",
+                    "message": "Model is loading in background, please wait...",
+                    "model_loading": model_loading,
                 },
             )
 

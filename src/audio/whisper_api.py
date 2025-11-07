@@ -5,9 +5,11 @@ To start:
     gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
 
+import logging
 import os
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 
 import torch
@@ -19,6 +21,8 @@ from pyannote.audio import Pipeline
 from src.core.auth import verify_api_key
 from src.core.buffer_class import Model_Buffer
 from src.core.config import config
+
+logger = logging.getLogger(__name__)
 
 
 class WhisperBuffer(Model_Buffer):
@@ -112,21 +116,35 @@ class DiarizationBuffer(Model_Buffer):
 # Create global buffer instances
 whisper_buffer = WhisperBuffer()
 diarization_buffer = DiarizationBuffer()
+models_loading = True  # Track if models are currently loading
 
 app = FastAPI()
 router = APIRouter()
 
 
+def load_models_background():
+    """Load models in background thread to avoid blocking server startup."""
+    global models_loading
+    try:
+        logger.info("Starting model initialization in background...")
+        # Initialize models
+        whisper_buffer.load_model(config.DEFAULT_WHISPER_MODEL)
+        diarization_buffer.load_model()
+        logger.info("Model initialization complete")
+    except Exception as e:
+        logger.error(f"Failed to load models: {e}")
+    finally:
+        models_loading = False
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Load models during FastAPI startup (non-blocking for health checks)."""
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info("Starting model initialization...")
-    # Initialize models
-    whisper_buffer.load_model(config.DEFAULT_WHISPER_MODEL)
-    diarization_buffer.load_model()
-    logger.info("Model initialization complete")
+    """Start background model loading without blocking server startup."""
+    logger.info("Server starting - launching background model loader...")
+    # Start model loading in daemon thread so it doesn't block server startup
+    thread = threading.Thread(target=load_models_background, daemon=True)
+    thread.start()
+    logger.info("Background model loading started, server is ready for requests")
 
 
 def diarize_audio(
@@ -241,23 +259,24 @@ async def health_check():
     Returns 200 OK when healthy, 503 Service Unavailable when starting/unhealthy.
     """
     try:
+        # Check if models are still loading in background
+        if models_loading:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "starting",
+                    "service": "whisper-api",
+                    "message": "Models are loading in background, please wait...",
+                    "models_loading": models_loading,
+                },
+            )
+
         # Check if models are still initializing
         whisper_status = whisper_buffer.get_status()
         diarization_status = diarization_buffer.get_status()
 
         whisper_loaded = whisper_status.get("is_loaded", False) if whisper_status else False
         diarization_loaded = diarization_status.get("is_loaded", False) if diarization_status else False
-
-        # If neither model is loaded yet, we're still starting
-        if not whisper_loaded and not diarization_loaded:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "starting",
-                    "service": "whisper-api",
-                    "message": "Models are loading, please wait...",
-                },
-            )
 
         # Check if we can access buffer attributes
         whisper_healthy = whisper_status is not None
