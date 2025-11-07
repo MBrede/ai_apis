@@ -70,27 +70,36 @@ class DiffusionModel(Model_Buffer):
 
     def load_model(self, model_id: str = "runwayml/stable-diffusion-v1-5", timeout: int = 600, **kwargs):
         """Load the diffusion model with automatic unloading after timeout."""
-        # If same model already loaded, just reset timer
-        if self.is_loaded() and self.model_id == model_id:
-            self.reset_timer(timeout)
-            return
+        # Use lock to prevent race conditions when multiple requests try to load simultaneously
+        with self._ensure_loading_lock():
+            logger.info(f"load_model called with model_id={model_id}, lock acquired")
 
-        # Set up timer using parent's load_model
-        super().load_model(timeout=timeout)
+            # If same model already loaded, just reset timer
+            if self.is_loaded() and self.model_id == model_id:
+                logger.info(f"Model {model_id} already loaded, resetting timer")
+                self.reset_timer(timeout)
+                return
 
-        # Load the pipeline
-        self.model_id = model_id
+            # Set up timer using parent's load_model
+            super().load_model(timeout=timeout)
 
-        # Load LoRA list if not already loaded
-        if not self.implemeted_loras:
-            self.load_implemented_loras()
+            # Load the pipeline
+            logger.info(f"Loading new model: {model_id}")
+            self.model_id = model_id
 
-        self.set_model({"model_id": self.model_id, "type": "prompt2img"})
-        self.loaded_at = datetime.now()
+            # Load LoRA list if not already loaded
+            if not self.implemeted_loras:
+                logger.info("Loading implemented LoRAs...")
+                self.load_implemented_loras()
 
-        # Start timer if configured
-        if self.timer:
-            self.timer.start()
+            logger.info(f"Calling set_model for {model_id}")
+            self.set_model({"model_id": self.model_id, "type": "prompt2img"})
+            self.loaded_at = datetime.now()
+
+            # Start timer if configured
+            if self.timer:
+                self.timer.start()
+                logger.info(f"Model {model_id} loaded successfully, timer started")
 
     def add_new_lora(self, lora_name):
         search_progress = ""

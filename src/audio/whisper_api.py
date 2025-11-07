@@ -33,22 +33,29 @@ class WhisperBuffer(Model_Buffer):
 
     def load_model(self, model_name: str, timeout: int = 300, **kwargs):
         """Load Whisper model with automatic unloading after timeout."""
-        # If same model already loaded, just reset timer
-        if self.is_loaded() and self.model_name == model_name:
-            self.reset_timer(timeout)
-            return
+        # Use lock to prevent race conditions
+        with self._ensure_loading_lock():
+            logger.info(f"WhisperBuffer.load_model called with model_name={model_name}, lock acquired")
 
-        # Call parent to set up timer
-        super().load_model(timeout=timeout)
+            # If same model already loaded, just reset timer
+            if self.is_loaded() and self.model_name == model_name:
+                logger.info(f"Whisper model {model_name} already loaded, resetting timer")
+                self.reset_timer(timeout)
+                return
 
-        # Load Whisper model
-        self.model = whisper.load_model(model_name, **kwargs)
-        self.model_name = model_name
-        self.loaded_at = datetime.now()
+            # Call parent to set up timer
+            super().load_model(timeout=timeout)
 
-        # Start timer if configured
-        if self.timer:
-            self.timer.start()
+            # Load Whisper model
+            logger.info(f"Loading Whisper model: {model_name}")
+            self.model = whisper.load_model(model_name, **kwargs)
+            self.model_name = model_name
+            self.loaded_at = datetime.now()
+
+            # Start timer if configured
+            if self.timer:
+                self.timer.start()
+                logger.info(f"Whisper model {model_name} loaded successfully")
 
     def transcribe(self, audio_path: str, **kwargs) -> dict:
         """Transcribe audio file."""
@@ -69,24 +76,31 @@ class DiarizationBuffer(Model_Buffer):
 
     def load_model(self, timeout: int = 300, **kwargs):
         """Load diarization pipeline with automatic unloading after timeout."""
-        # If already loaded, just reset timer
-        if self.is_loaded():
-            self.reset_timer(timeout)
-            return
+        # Use lock to prevent race conditions
+        with self._ensure_loading_lock():
+            logger.info("DiarizationBuffer.load_model called, lock acquired")
 
-        # Call parent to set up timer
-        super().load_model(timeout=timeout)
+            # If already loaded, just reset timer
+            if self.is_loaded():
+                logger.info("Diarization pipeline already loaded, resetting timer")
+                self.reset_timer(timeout)
+                return
 
-        # Load diarization pipeline
-        self.pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-community-1", token=config.HF_TOKEN
-        ).to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+            # Call parent to set up timer
+            super().load_model(timeout=timeout)
 
-        self.loaded_at = datetime.now()
+            # Load diarization pipeline
+            logger.info("Loading diarization pipeline...")
+            self.pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-community-1", token=config.HF_TOKEN
+            ).to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
-        # Start timer if configured
-        if self.timer:
-            self.timer.start()
+            self.loaded_at = datetime.now()
+
+            # Start timer if configured
+            if self.timer:
+                self.timer.start()
+                logger.info("Diarization pipeline loaded successfully")
 
     def diarize(
         self,

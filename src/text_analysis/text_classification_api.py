@@ -24,34 +24,43 @@ class ClassificationBuffer(Model_Buffer):
 
     def load_model(self, model_name: str, timeout: int = 300, **kwargs):
         """Load a text classification model with automatic unloading."""
-        # If same model already loaded, just reset timer
-        if self.is_loaded() and self.model_name == model_name:
-            self.reset_timer(timeout)
-            return
+        # Use lock to prevent race conditions
+        with self._ensure_loading_lock():
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"ClassificationBuffer.load_model called with model_name={model_name}, lock acquired")
 
-        # Call parent to set up timer
-        super().load_model(timeout=timeout)
+            # If same model already loaded, just reset timer
+            if self.is_loaded() and self.model_name == model_name:
+                logger.info(f"Text classification model {model_name} already loaded, resetting timer")
+                self.reset_timer(timeout)
+                return
 
-        # Determine model type
-        model_info = hf_api.model_info(model_name, token=config.HF_TOKEN)
-        self.is_setfit = model_info.library_name == "setfit"
+            # Call parent to set up timer
+            super().load_model(timeout=timeout)
 
-        # Load model based on type
-        if self.is_setfit:
-            self.model = SetFitModel.from_pretrained(model_name)
-            self.tokenizer = None
-        else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, token=config.HF_TOKEN)
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name, token=config.HF_TOKEN
-            )
+            # Determine model type
+            logger.info(f"Loading text classification model: {model_name}")
+            model_info = hf_api.model_info(model_name, token=config.HF_TOKEN)
+            self.is_setfit = model_info.library_name == "setfit"
 
-        self.model_name = model_name
-        self.loaded_at = datetime.now()
+            # Load model based on type
+            if self.is_setfit:
+                self.model = SetFitModel.from_pretrained(model_name)
+                self.tokenizer = None
+            else:
+                self.tokenizer = AutoTokenizer.from_pretrained(model_name, token=config.HF_TOKEN)
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name, token=config.HF_TOKEN
+                )
 
-        # Start timer if configured
-        if self.timer:
-            self.timer.start()
+            self.model_name = model_name
+            self.loaded_at = datetime.now()
+
+            # Start timer if configured
+            if self.timer:
+                self.timer.start()
+                logger.info(f"Text classification model {model_name} loaded successfully")
 
     def predict_proba(self, texts: list[str]) -> list[dict]:
         """Predict class probabilities for input texts."""

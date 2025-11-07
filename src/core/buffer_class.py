@@ -31,7 +31,7 @@ import gc
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from threading import Timer
+from threading import Lock, Timer
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -72,7 +72,20 @@ class Model_Buffer(ABC):
         self.timeout: int = -1
         self.loaded_at: datetime | None = None
         self.last_accessed: datetime | None = None
+        self._loading_lock: Lock | None = None  # Lazy init, only for load_model() race protection
         logger.info(f"{self.__class__.__name__} initialized")
+
+    def _ensure_loading_lock(self) -> Lock:
+        """
+        Ensure loading lock exists (lazy init for gunicorn fork safety).
+
+        This lock is ONLY used to protect the model loading operation from
+        race conditions when multiple requests try to load simultaneously.
+        It's NOT used for get_status() or other read operations.
+        """
+        if self._loading_lock is None:
+            self._loading_lock = Lock()
+        return self._loading_lock
 
     def is_loaded(self) -> bool:
         """
