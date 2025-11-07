@@ -4,20 +4,20 @@ Whisper Audio Transcription API with speaker diarization.
 To start:
     gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
+
 import os
 import subprocess
-import numpy as np
 import tempfile
-import torch
 from datetime import datetime
 
+import torch
 import whisper
-from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
 from pyannote.audio import Pipeline
 
-from src.core.config import config
 from src.core.auth import verify_api_key
 from src.core.buffer_class import Model_Buffer
+from src.core.config import config
 
 
 class WhisperBuffer(Model_Buffer):
@@ -75,9 +75,8 @@ class DiarizationBuffer(Model_Buffer):
 
         # Load diarization pipeline
         self.pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization@2.1",
-            use_auth_token=config.HF_TOKEN
-        ).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+            "pyannote/speaker-diarization@2.1", use_auth_token=config.HF_TOKEN
+        ).to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
         self.loaded_at = datetime.now()
 
@@ -85,8 +84,13 @@ class DiarizationBuffer(Model_Buffer):
         if self.timer:
             self.timer.start()
 
-    def diarize(self, audio_path: str, num_speakers: int = None,
-                min_speakers: int = None, max_speakers: int = None):
+    def diarize(
+        self,
+        audio_path: str,
+        num_speakers: int = None,
+        min_speakers: int = None,
+        max_speakers: int = None,
+    ):
         """Perform speaker diarization on audio file."""
         if not self.is_loaded():
             raise RuntimeError("Pipeline not loaded. Call load_model() first.")
@@ -97,10 +101,11 @@ class DiarizationBuffer(Model_Buffer):
         if num_speakers is not None:
             return self.pipeline(audio_path, num_speakers=num_speakers)
         elif min_speakers is not None:
-            return self.pipeline(audio_path, min_speakers=min_speakers,
-                               max_speakers=max_speakers)
+            return self.pipeline(audio_path, min_speakers=min_speakers, max_speakers=max_speakers)
         else:
-            raise ValueError("Either num_speakers or min_speakers and max_speakers must be provided.")
+            raise ValueError(
+                "Either num_speakers or min_speakers and max_speakers must be provided."
+            )
 
 
 # Create global buffer instances
@@ -115,35 +120,31 @@ app = FastAPI()
 router = APIRouter()
 
 
-def diarize_audio(file,
-                 num_speakers: int = None,
-                 min_speakers: int = None,
-                 max_speakers: int = None):
+def diarize_audio(
+    file, num_speakers: int = None, min_speakers: int = None, max_speakers: int = None
+):
     """Helper function to diarize audio and transcribe each speaker segment."""
-    with tempfile.NamedTemporaryFile(suffix='.wav') as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
         mono = tmp.name
-        cmd = 'ffmpeg -i "{}" -y -ac 1 {}'.format(file, mono)
+        cmd = f'ffmpeg -i "{file}" -y -ac 1 {mono}'
         subprocess.check_output(cmd, shell=True)
 
         # Use diarization buffer
         diarization = diarization_buffer.diarize(
-            mono,
-            num_speakers=num_speakers,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers
+            mono, num_speakers=num_speakers, min_speakers=min_speakers, max_speakers=max_speakers
         )
 
         # dump the diarization output to disk using RTTM format
         with open("audio.rttm", "w") as rttm:
             diarization.write_rttm(rttm)
 
-    with open("audio.rttm", "r") as f:
+    with open("audio.rttm") as f:
         lines = f.readlines()
 
     out = []
     for line in lines:
         _, _, _, start, duration, _, _, speaker, _, _ = line.split()
-        with tempfile.NamedTemporaryFile(suffix='.wav') as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
             cmd = f'ffmpeg -ss {start} -i "{file}" -t {duration} -y -ac 1 {tmp.name}'
             subprocess.check_output(cmd, shell=True)
 
@@ -151,39 +152,44 @@ def diarize_audio(file,
             transcription = whisper_buffer.transcribe(tmp.name, verbose=False)
             out.append(
                 {
-                    'SPEAKER': speaker,
-                    'START': start,
-                    'DURATION': duration,
-                    'TRANSCRIPTION': transcription['text'],
-                    'LANGUAGE': transcription['language']
+                    "SPEAKER": speaker,
+                    "START": start,
+                    "DURATION": duration,
+                    "TRANSCRIPTION": transcription["text"],
+                    "LANGUAGE": transcription["language"],
                 }
             )
     return out
 
 
 @router.post("/transcribe/")
-async def transcribe(file: UploadFile, model_to_use: str = 'turbo', api_key: str = Depends(verify_api_key)):
+async def transcribe(
+    file: UploadFile, model_to_use: str = "turbo", api_key: str = Depends(verify_api_key)
+):
     """Transcribe audio file using Whisper."""
     # Load the requested model (will reuse if already loaded)
     whisper_buffer.load_model(model_to_use)
 
     # Save uploaded file temporarily
-    with open(file.filename, 'wb') as f:
+    with open(file.filename, "wb") as f:
         file_contents = await file.read()
         f.write(file_contents)
 
     # Transcribe using buffer
-    answer = whisper_buffer.transcribe(file.filename, verbose=False)['text']
+    answer = whisper_buffer.transcribe(file.filename, verbose=False)["text"]
     os.remove(file.filename)
     return {"answer": answer}
 
 
 @router.post("/transcribe_and_diarize/")
-async def transcribe_diarize(file: UploadFile, model_to_use: str = 'turbo',
-                     num_speakers: int = None,
-                     min_speakers: int = None,
-                     max_speakers: int = None,
-                     api_key: str = Depends(verify_api_key)):
+async def transcribe_diarize(
+    file: UploadFile,
+    model_to_use: str = "turbo",
+    num_speakers: int = None,
+    min_speakers: int = None,
+    max_speakers: int = None,
+    api_key: str = Depends(verify_api_key),
+):
     """Transcribe audio with speaker identification."""
     # Load the requested Whisper model
     whisper_buffer.load_model(model_to_use)
@@ -192,7 +198,7 @@ async def transcribe_diarize(file: UploadFile, model_to_use: str = 'turbo',
     diarization_buffer.load_model()
 
     # Save uploaded file temporarily
-    with open(file.filename, 'wb') as f:
+    with open(file.filename, "wb") as f:
         file_contents = await file.read()
         f.write(file_contents)
 
@@ -201,24 +207,21 @@ async def transcribe_diarize(file: UploadFile, model_to_use: str = 'turbo',
             file.filename,
             num_speakers=num_speakers,
             min_speakers=min_speakers,
-            max_speakers=max_speakers
+            max_speakers=max_speakers,
         )
         os.remove(file.filename)
         return {"answer": answer}
     except ValueError:
         raise HTTPException(
             status_code=404,
-            detail="You need to specify either num_speakers or both min_speakers and max_speakers!"
+            detail="You need to specify either num_speakers or both min_speakers and max_speakers!",
         )
 
 
 @router.get("/buffer_status/")
 async def get_buffer_status(api_key: str = Depends(verify_api_key)):
     """Get current buffer status for debugging."""
-    return {
-        "whisper": whisper_buffer.get_status(),
-        "diarization": diarization_buffer.get_status()
-    }
+    return {"whisper": whisper_buffer.get_status(), "diarization": diarization_buffer.get_status()}
 
 
 app.include_router(router)

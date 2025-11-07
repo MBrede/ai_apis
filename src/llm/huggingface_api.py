@@ -12,19 +12,19 @@ Note: This uses an older LLM model (Mixtral-8x7B-Instruct-v0.1) and may benefit
 from upgrading to newer versions for improved performance and capabilities.
 """
 
+import os
+
+import torch
+from dotenv import load_dotenv
+from fastapi import APIRouter, FastAPI
+from pydantic import BaseModel
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     TextStreamer,
-    BitsAndBytesConfig,
 )
-from typing import Union
-from fastapi import FastAPI, APIRouter
-from pydantic import BaseModel
-import torch
-from dotenv import load_dotenv
-import os
 
 load_dotenv()
 
@@ -55,37 +55,38 @@ class LLM:
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
+            bnb_4bit_compute_dtype=torch.bfloat16,
         )
 
-        model_name = 'mistralai/Mixtral-8x7B-Instruct-v0.1'
+        model_name = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
-        self.model = AutoModelForCausalLM.from_pretrained(model_name,
-                                                             low_cpu_mem_usage=True,
-                                                             quantization_config=bnb_config,
-                                                             token=os.environ["hf_token"],
-                                                             device_map="cuda:1"
-                                                             )
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            low_cpu_mem_usage=True,
+            quantization_config=bnb_config,
+            token=os.environ["hf_token"],
+            device_map="cuda:1",
+        )
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name,
-                                                  token=os.environ["hf_token"])
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, token=os.environ["hf_token"])
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        self.generation_config = GenerationConfig(max_new_tokens=500,
-                                             temperature=0.4,
-                                             top_p=0.95,
-                                             top_k=40,
-                                             repetition_penalty=1.2,
-                                             bos_token_id=self.tokenizer.bos_token_id,
-                                             eos_token_id=self.tokenizer.eos_token_id,
-                                             tensor_parallel_size=4,
-                                             do_sample=True,
-                                             use_cache=True,
-                                             output_attentions=False,
-                                             output_hidden_states=False,
-                                             output_scores=False,
-                                             remove_invalid_values=True
-                                             )
+        self.generation_config = GenerationConfig(
+            max_new_tokens=500,
+            temperature=0.4,
+            top_p=0.95,
+            top_k=40,
+            repetition_penalty=1.2,
+            bos_token_id=self.tokenizer.bos_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+            tensor_parallel_size=4,
+            do_sample=True,
+            use_cache=True,
+            output_attentions=False,
+            output_hidden_states=False,
+            output_scores=False,
+            remove_invalid_values=True,
+        )
         self.streamer = TextStreamer(self.tokenizer)
 
         self.prompt_template = (
@@ -138,10 +139,11 @@ class LLM:
         input_tokens = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         self.generation_config.temperature = temp
         self.generation_config.max_tokens = max_new_tokens
-        output_tokens = self.model.generate(**input_tokens, generation_config=self.generation_config,
-                                            streamer=self.streamer)[0]
+        output_tokens = self.model.generate(
+            **input_tokens, generation_config=self.generation_config, streamer=self.streamer
+        )[0]
         answer = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
-        return answer.split('ASSISTANT:')[1]
+        return answer.split("ASSISTANT:")[1]
 
 
 llm = LLM()

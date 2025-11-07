@@ -1,5 +1,5 @@
-from unsloth import FastLanguageModel
 import torch
+from unsloth import FastLanguageModel
 
 max_seq_length = 2048  # Choose any! We auto support RoPE Scaling internally!
 dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
@@ -16,8 +16,15 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 model = FastLanguageModel.get_peft_model(
     model,
     r=16,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                    "gate_proj", "up_proj", "down_proj", ],
+    target_modules=[
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ],
     lora_alpha=16,
     lora_dropout=0,  # Supports any, but = 0 is optimized
     bias="none",  # Supports any, but = "none" is optimized
@@ -80,7 +87,9 @@ def formatting_prompts_func(examples):
         # Must add EOS_TOKEN, otherwise your generation will go on forever!
         text = alpaca_prompt.format(text=input, response=output) + EOS_TOKEN
         texts.append(text)
-    return {"text": texts, }
+    return {
+        "text": texts,
+    }
 
 
 pass
@@ -88,10 +97,13 @@ pass
 from datasets import load_dataset
 
 dataset = load_dataset("yahma/alpaca-cleaned", split="train")
-dataset = dataset.map(formatting_prompts_func, batched=True, )
+dataset = dataset.map(
+    formatting_prompts_func,
+    batched=True,
+)
 
-from trl import SFTTrainer
 from transformers import TrainingArguments
+from trl import SFTTrainer
 
 trainer = SFTTrainer(
     model=model,

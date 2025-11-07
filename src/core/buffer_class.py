@@ -28,12 +28,14 @@ Usage Example:
 """
 
 import gc
-import torch
-from abc import ABC, abstractmethod
-from threading import Timer, Lock
-from datetime import datetime
-from typing import Any, Optional
 import logging
+from abc import ABC, abstractmethod
+from datetime import datetime
+from threading import Lock, Timer
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +65,13 @@ class Model_Buffer(ABC):
 
     def __init__(self) -> None:
         """Initialize the model buffer with None values for all attributes."""
-        self.timer: Optional[Timer] = None
+        self.timer: Timer | None = None
         self.model: Any = None
         self.pipeline: Any = None
         self.tokenizer: Any = None
         self.timeout: int = -1
-        self.loaded_at: Optional[datetime] = None
-        self.last_accessed: Optional[datetime] = None
+        self.loaded_at: datetime | None = None
+        self.last_accessed: datetime | None = None
         self._lock = Lock()
         logger.info(f"{self.__class__.__name__} initialized")
 
@@ -106,7 +108,9 @@ class Model_Buffer(ABC):
                 "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
                 "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
                 "timeout_seconds": self.timeout,
-                "timer_active": self.timer is not None and self.timer.is_alive() if self.timer else False,
+                "timer_active": (
+                    self.timer is not None and self.timer.is_alive() if self.timer else False
+                ),
             }
 
     def unload_model(self) -> None:
@@ -142,12 +146,18 @@ class Model_Buffer(ABC):
             # Force garbage collection
             gc.collect()
 
-            # Clear CUDA cache if available
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logger.info("CUDA cache cleared")
+            # Clear CUDA cache if available (lazy import torch)
+            try:
+                import torch
 
-    def reset_timer(self, timeout: Optional[int] = None) -> None:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logger.info("CUDA cache cleared")
+            except ImportError:
+                # torch not available, skip CUDA cache clearing
+                pass
+
+    def reset_timer(self, timeout: int | None = None) -> None:
         """
         Reset the unload timer to prevent premature model unloading.
 
@@ -282,7 +292,7 @@ class Model_Buffer(ABC):
     def __del__(self):
         """Cleanup on deletion - cancel timer and unload model."""
         try:
-            if hasattr(self, 'timer') and self.timer is not None:
+            if hasattr(self, "timer") and self.timer is not None:
                 self.timer.cancel()
         except Exception:
             pass

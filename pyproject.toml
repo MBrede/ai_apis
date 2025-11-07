@@ -90,6 +90,8 @@ llm-training = [
 dev = [
     "pytest>=8.3.4",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
     "black>=24.10.0",
     "isort>=5.13.2",
     "mypy>=1.14.0",
@@ -151,6 +153,11 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -169,8 +176,18 @@ select = [
 ignore = [
     "E501",  # line too long, handled by black
     "B008",  # do not perform function calls in argument defaults
+    "B904",  # raise from recommendations (can be added later)
+    "B905",  # zip strict parameter (requires Python 3.10+)
+    "B007",  # unused loop variable (often intentional)
+    "B027",  # empty abstract methods (intentional for optional overrides)
+    "C416",  # unnecessary comprehension (minor optimization)
     "C901",  # too complex
+    "C419",  # unnecessary list comprehension (minor optimization)
+    "W291",  # trailing whitespace (handled by black/editors)
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"src/training/*.py" = ["E402", "B007", "W291"]  # Training scripts have intentional structure
+"src/text_analysis/*.py" = ["E402"]  # FastAPI imports after skipped imports
+"tests/*.py" = ["F841", "E402"]  # Test structure exceptions

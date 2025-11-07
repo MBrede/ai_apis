@@ -3,9 +3,10 @@ To start the API navigate to the scripts folder and call:
 gunicorn command_r_api:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:1234
 this requires a gunicorn to be installed (pip install should do the trick)
 """
-from fastapi import FastAPI, APIRouter
-from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 class LLM:
@@ -39,11 +40,11 @@ class LLM:
 
     def generate_naked(self, prompt, role: str = None, temp: float = 0.3, max_new_tokens=500):
         if role is None:
-            role = 'user'
+            role = "user"
         messages = [{"role": role, "content": prompt}]
-        input_ids = self.tokenizer.apply_chat_template(messages, tokenize=True,
-                                                       add_generation_prompt=True,
-                                                       return_tensors="pt").to('cuda')
+        input_ids = self.tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
+        ).to("cuda")
         gen_tokens = self.model.generate(
             input_ids,
             max_new_tokens=max_new_tokens,
@@ -65,20 +66,25 @@ async def llm_prompt_assistance(text: str):
 
 
 @router.get("/llm_interface")
-async def llm_interface(text: str, role: str = None, temp: float = .3):
+async def llm_interface(text: str, role: str = None, temp: float = 0.3):
     return llm.generate_naked(prompt=text, role=role, temp=temp)
 
+
 class Item(BaseModel):
-    system: str | None = 'Du bist ein hilfreicher Assistent.'
-    messages: str | None = 'Erzähl mir eine Geschichte über Schnabeltiere und Data Science.'
+    system: str | None = "Du bist ein hilfreicher Assistent."
+    messages: str | None = "Erzähl mir eine Geschichte über Schnabeltiere und Data Science."
     temperature: float | None = 0.1
     max_tokens: int | None = 500
 
 
 @router.post("/answer/")
 def get_answer(item: Item):
-    prompt = "{}\n\n{}".format(item.system, item.messages)
-    return {"message": llm.generate_naked(prompt=prompt, temp=item.temperature, max_new_tokens=item.max_tokens)}
+    prompt = f"{item.system}\n\n{item.messages}"
+    return {
+        "message": llm.generate_naked(
+            prompt=prompt, temp=item.temperature, max_new_tokens=item.max_tokens
+        )
+    }
 
 
 app.include_router(router)

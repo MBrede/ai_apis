@@ -6,10 +6,10 @@ including endpoint URLs, authentication settings, and API keys.
 Load settings from environment variables when available.
 """
 
-import os
 import logging
+import os
 from pathlib import Path
-from typing import Optional
+
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -55,13 +55,13 @@ class APIConfig:
     # =============================================================================
 
     # API Key for authentication (IMPORTANT: Set in .env file!)
-    API_KEY: Optional[str] = os.getenv("API_KEY")
+    API_KEY: str | None = os.getenv("API_KEY")
 
     # Require authentication (set to False for development only)
     REQUIRE_AUTH: bool = os.getenv("REQUIRE_AUTH", "True").lower() == "true"
 
     # Admin API key for privileged operations
-    ADMIN_API_KEY: Optional[str] = os.getenv("ADMIN_API_KEY")
+    ADMIN_API_KEY: str | None = os.getenv("ADMIN_API_KEY")
 
     # =============================================================================
     # MongoDB Configuration
@@ -71,10 +71,7 @@ class APIConfig:
     USE_MONGODB: bool = os.getenv("USE_MONGODB", "False").lower() == "true"
 
     # MongoDB connection URL
-    MONGODB_URL: str = os.getenv(
-        "MONGODB_URL",
-        "mongodb://localhost:27017/"
-    )
+    MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
 
     # MongoDB database name
     MONGODB_DB: str = os.getenv("MONGODB_DB", "ai_apis")
@@ -84,13 +81,13 @@ class APIConfig:
     # =============================================================================
 
     # HuggingFace token
-    HF_TOKEN: Optional[str] = os.getenv("hf_token") or os.getenv("HF_TOKEN")
+    HF_TOKEN: str | None = os.getenv("hf_token") or os.getenv("HF_TOKEN")
 
     # Civitai API key (for LORA downloads)
-    CIVIT_KEY: Optional[str] = os.getenv("civit_key") or os.getenv("CIVIT_KEY")
+    CIVIT_KEY: str | None = os.getenv("civit_key") or os.getenv("CIVIT_KEY")
 
     # Telegram bot token
-    TELEGRAM_TOKEN: Optional[str] = os.getenv("telegram_token") or os.getenv("TELEGRAM_TOKEN")
+    TELEGRAM_TOKEN: str | None = os.getenv("telegram_token") or os.getenv("TELEGRAM_TOKEN")
 
     # =============================================================================
     # File Paths
@@ -119,10 +116,7 @@ class APIConfig:
     DEFAULT_WHISPER_MODEL: str = os.getenv("DEFAULT_WHISPER_MODEL", "turbo")
 
     # Default Stable Diffusion model
-    DEFAULT_SD_MODEL: str = os.getenv(
-        "DEFAULT_SD_MODEL",
-        "stabilityai/stable-diffusion-2-1"
-    )
+    DEFAULT_SD_MODEL: str = os.getenv("DEFAULT_SD_MODEL", "stabilityai/stable-diffusion-2-1")
 
     # Torch dtype
     DEFAULT_TORCH_DTYPE: str = os.getenv("DEFAULT_TORCH_DTYPE", "float16")
@@ -167,14 +161,10 @@ class APIConfig:
             )
 
         if not cls.HF_TOKEN:
-            warnings.append(
-                "⚠️  HF_TOKEN not set. HuggingFace model downloads may fail."
-            )
+            warnings.append("⚠️  HF_TOKEN not set. HuggingFace model downloads may fail.")
 
         if not cls.TELEGRAM_TOKEN:
-            warnings.append(
-                "⚠️  TELEGRAM_TOKEN not set. Telegram bot will not work."
-            )
+            warnings.append("⚠️  TELEGRAM_TOKEN not set. Telegram bot will not work.")
 
         return warnings
 
