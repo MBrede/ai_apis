@@ -72,8 +72,21 @@ class Model_Buffer(ABC):
         self.timeout: int = -1
         self.loaded_at: datetime | None = None
         self.last_accessed: datetime | None = None
-        self._lock = Lock()
+        self._lock: Lock | None = None  # Lazy init - don't create until first use (gunicorn fork safety)
         logger.info(f"{self.__class__.__name__} initialized")
+
+    @property
+    def lock(self) -> Lock:
+        """
+        Lazy-initialize lock on first access.
+
+        This is critical for gunicorn compatibility: Lock objects created before
+        fork() are broken in child processes. By creating the lock on first access,
+        we ensure it's created in the worker process after fork.
+        """
+        if self._lock is None:
+            self._lock = Lock()
+        return self._lock
 
     def is_loaded(self) -> bool:
         """
@@ -82,7 +95,7 @@ class Model_Buffer(ABC):
         Returns:
             bool: True if model is loaded, False otherwise
         """
-        with self._lock:
+        with self.lock:
             return self.model is not None or self.pipeline is not None
 
     def get_status(self) -> dict:
@@ -102,7 +115,7 @@ class Model_Buffer(ABC):
                 'timer_active': True
             }
         """
-        with self._lock:
+        with self.lock:
             return {
                 "is_loaded": self.is_loaded(),
                 "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
@@ -114,7 +127,7 @@ class Model_Buffer(ABC):
             }
 
     def unload_model(self) -> None:
-        with self._lock:
+        with self.lock:
             logger.info(f"{self.__class__.__name__}: Unloading model")
 
             timer_to_cancel = self.timer
@@ -155,7 +168,7 @@ class Model_Buffer(ABC):
             >>> buffer.reset_timer()  # Reset with current timeout
             >>> buffer.reset_timer(600)  # Reset with new 10-minute timeout
         """
-        with self._lock:
+        with self.lock:
             # Update last accessed time
             self.last_accessed = datetime.now()
 
@@ -190,7 +203,7 @@ class Model_Buffer(ABC):
         Example:
             >>> buffer.cancel_timer()  # Model stays loaded until manual unload
         """
-        with self._lock:
+        with self.lock:
             if self.timer is not None:
                 try:
                     self.timer.cancel()
@@ -240,7 +253,7 @@ class Model_Buffer(ABC):
                     logger.info("Model already loaded, resetting timer")
                     self.reset_timer(timeout)
         """
-        with self._lock:
+        with self.lock:
             # Cancel any existing timer
             if self.timer is not None:
                 self.timer.cancel()

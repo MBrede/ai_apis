@@ -9,7 +9,6 @@ import logging
 import os
 import subprocess
 import tempfile
-import threading
 from datetime import datetime
 
 import torch
@@ -113,38 +112,12 @@ class DiarizationBuffer(Model_Buffer):
             )
 
 
-# Create global buffer instances
+# Create global buffer instances (models load on first request - lazy loading)
 whisper_buffer = WhisperBuffer()
 diarization_buffer = DiarizationBuffer()
-models_loading = True  # Track if models are currently loading
 
 app = FastAPI()
 router = APIRouter()
-
-
-def load_models_background():
-    """Load models in background thread to avoid blocking server startup."""
-    global models_loading
-    try:
-        logger.info("Starting model initialization in background...")
-        # Initialize models
-        whisper_buffer.load_model(config.DEFAULT_WHISPER_MODEL)
-        diarization_buffer.load_model()
-        logger.info("Model initialization complete")
-    except Exception as e:
-        logger.error(f"Failed to load models: {e}")
-    finally:
-        models_loading = False
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Start background model loading without blocking server startup."""
-    logger.info("Server starting - launching background model loader...")
-    # Start model loading in daemon thread so it doesn't block server startup
-    thread = threading.Thread(target=load_models_background, daemon=True)
-    thread.start()
-    logger.info("Background model loading started, server is ready for requests")
 
 
 def diarize_audio(
@@ -194,8 +167,10 @@ async def transcribe(
     file: UploadFile, model_to_use: str = "turbo", api_key: str = Depends(verify_api_key)
 ):
     """Transcribe audio file using Whisper."""
-    # Load the requested model (will reuse if already loaded)
-    whisper_buffer.load_model(model_to_use)
+    # Load the requested model on first request (lazy loading)
+    if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
+        logger.info(f"Loading Whisper model on request: {model_to_use}")
+        whisper_buffer.load_model(model_to_use)
 
     # Save uploaded file temporarily
     with open(file.filename, "wb") as f:
@@ -218,11 +193,15 @@ async def transcribe_diarize(
     api_key: str = Depends(verify_api_key),
 ):
     """Transcribe audio with speaker identification."""
-    # Load the requested Whisper model
-    whisper_buffer.load_model(model_to_use)
+    # Load the requested Whisper model on first request (lazy loading)
+    if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
+        logger.info(f"Loading Whisper model on request: {model_to_use}")
+        whisper_buffer.load_model(model_to_use)
 
-    # Ensure diarization pipeline is loaded
-    diarization_buffer.load_model()
+    # Ensure diarization pipeline is loaded on first request (lazy loading)
+    if not diarization_buffer.is_loaded():
+        logger.info("Loading diarization pipeline on request")
+        diarization_buffer.load_model()
 
     # Save uploaded file temporarily
     with open(file.filename, "wb") as f:
@@ -256,22 +235,11 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffers are functioning.
-    Returns 200 OK when healthy, 503 Service Unavailable when starting/unhealthy.
+    Returns 200 OK when healthy (ready to accept requests).
+    Note: Models load on first request (lazy loading).
     """
     try:
-        # Check if models are still loading in background
-        if models_loading:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "starting",
-                    "service": "whisper-api",
-                    "message": "Models are loading in background, please wait...",
-                    "models_loading": models_loading,
-                },
-            )
-
-        # Check if models are still initializing
+        # Check buffer status
         whisper_status = whisper_buffer.get_status()
         diarization_status = diarization_buffer.get_status()
 
@@ -290,6 +258,7 @@ async def health_check():
             "diarization_buffer_accessible": diarization_healthy,
             "whisper_model_loaded": whisper_loaded,
             "diarization_model_loaded": diarization_loaded,
+            "note": "Models will load on first request" if not (whisper_loaded and diarization_loaded) else None,
         }
 
         # Return 503 if unhealthy, 200 if healthy
