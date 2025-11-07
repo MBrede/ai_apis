@@ -22,6 +22,8 @@ def init_mongodb():
     """Initialize MongoDB with collections and indexes."""
 
     # Get MongoDB connection details
+    mongodb_admin = os.getenv("MONGO_ROOT_USER", "admin")
+    mongodb_pw = os.getenv("MONGO_ROOT_PASSWORD", "password")
     mongodb_url = os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
     mongodb_db = os.getenv("MONGODB_DB", "ai_apis")
     api_key = os.getenv("API_KEY", "your-api-key-here")
@@ -31,7 +33,9 @@ def init_mongodb():
 
     try:
         # Connect to MongoDB
-        client = MongoClient(mongodb_url)
+        client = MongoClient(mongodb_url,
+                             username=mongodb_admin,
+                             password=mongodb_pw)
         db = client[mongodb_db]
 
         # Test connection
