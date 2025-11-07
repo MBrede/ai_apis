@@ -75,7 +75,7 @@ class DiarizationBuffer(Model_Buffer):
 
         # Load diarization pipeline
         self.pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization@2.1", use_auth_token=config.HF_TOKEN
+            "pyannote/speaker-diarization@2.1", token=config.HF_TOKEN
         ).to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
         self.loaded_at = datetime.now()
@@ -222,6 +222,40 @@ async def transcribe_diarize(
 async def get_buffer_status(api_key: str = Depends(verify_api_key)):
     """Get current buffer status for debugging."""
     return {"whisper": whisper_buffer.get_status(), "diarization": diarization_buffer.get_status()}
+
+
+@router.get("/health")
+async def health_check():
+    """
+    Health check endpoint for Docker HEALTHCHECK.
+    Tests if API is running and buffers are functioning.
+    """
+    try:
+        # Test if buffers are accessible and working
+        whisper_status = whisper_buffer.get_status()
+        diarization_status = diarization_buffer.get_status()
+
+        # Check if we can access buffer attributes
+        whisper_healthy = whisper_status is not None
+        diarization_healthy = diarization_status is not None
+        is_healthy = whisper_healthy and diarization_healthy
+
+        return {
+            "status": "healthy" if is_healthy else "unhealthy",
+            "service": "whisper-api",
+            "whisper_buffer_accessible": whisper_healthy,
+            "diarization_buffer_accessible": diarization_healthy,
+            "whisper_model_loaded": whisper_status.get("is_loaded", False) if whisper_status else False,
+            "diarization_model_loaded": (
+                diarization_status.get("is_loaded", False) if diarization_status else False
+            ),
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "service": "whisper-api",
+            "error": str(e),
+        }
 
 
 app.include_router(router)

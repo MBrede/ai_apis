@@ -95,7 +95,7 @@ router = APIRouter()
 from fastapi import Depends
 from pydantic import BaseModel
 
-from core.auth import verify_api_key
+from src.core.auth import verify_api_key
 
 
 class Text_Request(BaseModel):
@@ -114,6 +114,33 @@ async def get_answer(request: Text_Request, api_key: str = Depends(verify_api_ke
 async def get_buffer_status(api_key: str = Depends(verify_api_key)):
     """Get current buffer status for debugging."""
     return classification_buffer.get_status()
+
+
+@router.get("/health")
+async def health_check():
+    """
+    Health check endpoint for Docker HEALTHCHECK.
+    Tests if API is running and buffer is functioning.
+    """
+    try:
+        # Test if buffer is accessible and working
+        buffer_status = classification_buffer.get_status()
+
+        # Check if we can access buffer attributes
+        is_healthy = buffer_status is not None
+
+        return {
+            "status": "healthy" if is_healthy else "unhealthy",
+            "service": "text-classification-api",
+            "buffer_accessible": is_healthy,
+            "model_loaded": buffer_status.get("is_loaded", False) if buffer_status else False,
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "service": "text-classification-api",
+            "error": str(e),
+        }
 
 
 app.include_router(router)
