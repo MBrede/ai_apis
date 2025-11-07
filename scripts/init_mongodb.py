@@ -106,9 +106,7 @@ def add_telegram_user(
             "user_id": user_id,
             "admin": is_admin,
             "mode": "sd",  # Default mode
-            "current_settings": user_settings,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "current_settings": user_settings
         }
 
         if username:
@@ -117,7 +115,7 @@ def add_telegram_user(
         # Insert or update user
         result = bot_users_collection.update_one(
             {"user_id": user_id},
-            {"$set": user_doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
+            {"$set": user_doc, "$setOnInsert": {"created_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
             upsert=True,
         )
 
