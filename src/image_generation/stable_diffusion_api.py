@@ -438,7 +438,7 @@ async def llm_interface(text: str, role: str = None, api_key: str = Depends(veri
     "/post_config", responses={200: {"content": {"image/png": {}}}}, response_class=Response
 )
 async def get_image(
-    item: Item = Depends(), image: UploadFile = File(None), api_key: str = Depends(verify_api_key)
+    item: Item = Depends(), image: UploadFile = File() | None = None, api_key: str = Depends(verify_api_key)
 ):
     """Generate images using Stable Diffusion with optional LORA."""
     cfg = _refactor_config(vars(item))
