@@ -27,7 +27,7 @@ services:
   stable_diffusion:
     build:
       context: .
-      dockerfile: docker/Dockerfile.stable_diffusion
+      dockerfile: docker/Dockerfile.stable_diffusion.hub
     container_name: ai_apis_stable_diffusion
     restart: unless-stopped
     environment:
@@ -61,7 +61,7 @@ services:
   whisper:
     build:
       context: .
-      dockerfile: docker/Dockerfile.whisper
+      dockerfile: docker/Dockerfile.whisper.hub
     container_name: ai_apis_whisper
     restart: unless-stopped
     environment:
@@ -92,7 +92,7 @@ services:
   text_classification:
     build:
       context: .
-      dockerfile: docker/Dockerfile.text_analysis
+      dockerfile: docker/Dockerfile.text_analysis.hub
     container_name: ai_apis_text_classification
     restart: unless-stopped
     environment:

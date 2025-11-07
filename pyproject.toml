@@ -134,9 +134,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/ai_apis"
-Repository = "https://github.com/yourusername/ai_apis"
-"Bug Tracker" = "https://github.com/yourusername/ai_apis/issues"
+Homepage = "https://github.com/MBrede/ai_apis"
+Repository = "https://github.com/MBrede/ai_apis"
+"Bug Tracker" = "https://github.com/MBrede/ai_apis/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

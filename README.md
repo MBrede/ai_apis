@@ -35,7 +35,7 @@ For faster Docker builds, you can use a pre-built base image with all common dep
 
 ```bash
 # Build and push base image once (requires Docker Hub account)
-./scripts/build_and_push_base.sh 1.0.0 yourusername
+./scripts/build_and_push_base.sh 1.0.0 mbrede
 
 # Then use *.hub Dockerfiles for 5x faster builds
 docker build -f docker/Dockerfile.stable_diffusion.hub -t ai_apis_sd:latest .
