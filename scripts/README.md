@@ -26,14 +26,14 @@ Builds and pushes the base Docker image to Docker Hub. This base image contains 
 
 ```bash
 # Build and push with version 1.0.0
-./scripts/build_and_push_base.sh 1.0.0 mbrede
+./scripts/build_and_push_base.sh 1.0.0 yourusername
 
 # Build and push as latest using environment variable
-export DOCKERHUB_USERNAME=mbrede
+export DOCKERHUB_USERNAME=yourusername
 ./scripts/build_and_push_base.sh
 
 # Build specific version
-./scripts/build_and_push_base.sh 1.2.3 mbrede
+./scripts/build_and_push_base.sh 1.2.3 yourusername
 ```
 
 ### What It Does
@@ -47,8 +47,8 @@ export DOCKERHUB_USERNAME=mbrede
 ### Output Image
 
 The script creates and pushes:
-- `mbrede/ai-apis-base:VERSION`
-- `mbrede/ai-apis-base:latest`
+- `yourusername/ai-apis-base:VERSION`
+- `yourusername/ai-apis-base:latest`
 
 ### Benefits
 
