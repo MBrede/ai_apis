@@ -59,6 +59,7 @@ stable-diffusion-only = [
     "pillow>=11.0.0",
     "torchvision>=0.21.0",
     "tqdm>=4.67.1",
+    "python-multipart>=0.0.20"
 ]
 
 whisper-only = [
