@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import subprocess
-import threading
 from datetime import datetime
 from io import BytesIO
 
@@ -55,7 +54,7 @@ class DiffusionModel(Model_Buffer):
 
     schedulers = {"euler": EulerDiscreteScheduler}
 
-    def __init__(self, model_id: str = "runwayml/stable-diffusion-v1-5", timeout: int = 600):
+    def __init__(self):
         # Initialize buffer (sets self.model, self.pipeline, etc. to None)
         super().__init__()
 
@@ -64,19 +63,27 @@ class DiffusionModel(Model_Buffer):
         self.type = "prompt2img"
         self.model_id = None
         self.loaded_pipeline = None
+        self.implemeted_loras = {}
 
-        # Load model with timeout (10 minutes default for slow SD models)
-        self.load_model(model_id=model_id, timeout=timeout)
-        self.load_implemented_loras()
+        # Don't load model here - load on first request (lazy loading)
+        # This prevents blocking the server startup
 
-    def load_model(self, model_id: str = None, timeout: int = 600, **kwargs):
+    def load_model(self, model_id: str = "runwayml/stable-diffusion-v1-5", timeout: int = 600, **kwargs):
         """Load the diffusion model with automatic unloading after timeout."""
+        # If same model already loaded, just reset timer
+        if self.is_loaded() and self.model_id == model_id:
+            self.reset_timer(timeout)
+            return
+
         # Set up timer using parent's load_model
         super().load_model(timeout=timeout)
 
         # Load the pipeline
-        if model_id:
-            self.model_id = model_id
+        self.model_id = model_id
+
+        # Load LoRA list if not already loaded
+        if not self.implemeted_loras:
+            self.load_implemented_loras()
 
         self.set_model({"model_id": self.model_id, "type": "prompt2img"})
         self.loaded_at = datetime.now()
@@ -316,6 +323,12 @@ class DiffusionModel(Model_Buffer):
         return images
 
     def gen_image(self, prompt, config):
+        # Ensure model is loaded (lazy loading on first use)
+        if not self.is_loaded():
+            default_model = config.get("model_id", "runwayml/stable-diffusion-v1-5")
+            logger.info(f"Loading model on first request: {default_model}")
+            self.load_model(model_id=default_model, timeout=600)
+
         # Reset timer on each image generation
         self.reset_timer()
 
@@ -358,36 +371,13 @@ def image_grid(imgs):
 
 logger = logging.getLogger(__name__)
 
-model = None  # Initialize as None, load in background
-model_loading = True  # Track if model is currently loading
+# Create buffer instance but don't load any models yet (lazy loading)
+model = DiffusionModel()
 model_config = ["torch_dtype"]
 prompt_config = ["num_inference_steps", "guidance_scale", "negative_prompt"]
 
 app = FastAPI()
 router = APIRouter()
-
-
-def load_model_background():
-    """Load model in background thread to avoid blocking server startup."""
-    global model, model_loading
-    try:
-        logger.info("Starting model initialization in background...")
-        model = DiffusionModel()
-        logger.info("Model initialization complete")
-    except Exception as e:
-        logger.error(f"Failed to load model: {e}")
-    finally:
-        model_loading = False
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Start background model loading without blocking server startup."""
-    logger.info("Server starting - launching background model loader...")
-    # Start model loading in daemon thread so it doesn't block server startup
-    thread = threading.Thread(target=load_model_background, daemon=True)
-    thread.start()
-    logger.info("Background model loading started, server is ready for requests")
 
 
 class Item(BaseModel):
@@ -507,21 +497,10 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffer is functioning.
-    Returns 200 OK when healthy, 503 Service Unavailable when starting/unhealthy.
+    Returns 200 OK when healthy (ready to accept requests).
+    Note: Models load on first request (lazy loading).
     """
     try:
-        # Check if model is still loading
-        if model_loading or model is None:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "starting",
-                    "service": "stable-diffusion-api",
-                    "message": "Model is loading in background, please wait...",
-                    "model_loading": model_loading,
-                },
-            )
-
         # Test if buffer is accessible and working
         buffer_status = model.get_status()
 
@@ -533,6 +512,7 @@ async def health_check():
             "service": "stable-diffusion-api",
             "buffer_accessible": is_healthy,
             "model_loaded": buffer_status.get("is_loaded", False) if buffer_status else False,
+            "note": "Model will load on first request" if not buffer_status.get("is_loaded", False) else None,
         }
 
         # Return 503 if unhealthy, 200 if healthy
