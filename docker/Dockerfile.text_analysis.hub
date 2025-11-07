@@ -2,7 +2,7 @@
 # Base image already contains: Python, CUDA, uv, system packages, api-core (FastAPI etc.), ml-base (torch, numpy)
 #
 # To use this Dockerfile:
-# 1. Build and push base image: ./scripts/build_and_push_base.sh 1.0.0 mbrede
+# 1. Build and push base image: ./scripts/build_and_push_base.sh 1.0.0 yourusername
 # 2. Build: docker build -f docker/Dockerfile.text_analysis.hub -t ai_apis_text:latest .
 
 # Use pre-built base image from Docker Hub
