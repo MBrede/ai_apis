@@ -18,7 +18,7 @@ RUN uv pip install -e "/app[text-analysis-only]"
 # Copy source code
 COPY src/core/ /app/src/core/
 COPY src/text_analysis/ /app/src/text_analysis/
-COPY .env.example /app/.env
+COPY .env /app/.env
 
 # Expose port
 EXPOSE 8000

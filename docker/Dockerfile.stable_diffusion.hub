@@ -18,7 +18,7 @@ RUN uv pip install -e "/app[stable-diffusion-only]"
 # Copy source code
 COPY src/core/ /app/src/core/
 COPY src/image_generation/ /app/src/image_generation/
-COPY .env.example /app/.env
+COPY .env /app/.env
 
 # Create directories for models and loras
 RUN mkdir -p /app/loras /app/models
