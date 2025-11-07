@@ -75,7 +75,7 @@ class DiarizationBuffer(Model_Buffer):
 
         # Load diarization pipeline
         self.pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization@2.1", use_auth_token=config.HF_TOKEN
+            "pyannote/speaker-diarization@2.1", token=config.HF_TOKEN
         ).to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
         self.loaded_at = datetime.now()

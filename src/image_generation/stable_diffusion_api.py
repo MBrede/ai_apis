@@ -150,8 +150,14 @@ class DiffusionModel(Model_Buffer):
 
     def load_implemented_loras(self):
         global sd_paths
-        with open("lora_list.json") as f:
-            self.implemeted_loras = json.load(f)
+        try:
+            with open("lora_list.json") as f:
+                self.implemeted_loras = json.load(f)
+        except FileNotFoundError:
+            # Initialize with empty dict if file doesn't exist
+            self.implemeted_loras = {}
+            with open("lora_list.json", "w") as f:
+                json.dump(self.implemeted_loras, f, indent=4)
         self._update_lora_info()
         self.prep_lora()
 

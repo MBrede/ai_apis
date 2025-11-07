@@ -95,7 +95,7 @@ router = APIRouter()
 from fastapi import Depends
 from pydantic import BaseModel
 
-from core.auth import verify_api_key
+from src.core.auth import verify_api_key
 
 
 class Text_Request(BaseModel):
