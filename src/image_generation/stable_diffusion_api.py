@@ -354,12 +354,23 @@ def image_grid(imgs):
     return grid
 
 
-model = DiffusionModel()
+model = None  # Initialize as None, load during startup
 model_config = ["torch_dtype"]
 prompt_config = ["num_inference_steps", "guidance_scale", "negative_prompt"]
 
 app = FastAPI()
 router = APIRouter()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Load model during FastAPI startup (non-blocking for health checks)."""
+    global model
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Starting model initialization...")
+    model = DiffusionModel()
+    logger.info("Model initialization complete")
 
 
 class Item(BaseModel):
@@ -479,9 +490,20 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffer is functioning.
-    Returns 200 OK when healthy, 503 Service Unavailable when unhealthy.
+    Returns 200 OK when healthy, 503 Service Unavailable when starting/unhealthy.
     """
     try:
+        # Check if model has been initialized
+        if model is None:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "starting",
+                    "service": "stable-diffusion-api",
+                    "message": "Model is loading, please wait...",
+                },
+            )
+
         # Test if buffer is accessible and working
         buffer_status = model.get_status()
 
