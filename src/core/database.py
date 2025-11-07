@@ -30,7 +30,7 @@ def get_mongo_db() -> Database | None:
     global _mongo_client, _mongo_db
 
     # Import config here to avoid circular imports
-    from core.config import config
+    from .config import config
 
     if not config.USE_MONGODB:
         return None
