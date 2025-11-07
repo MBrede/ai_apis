@@ -41,7 +41,8 @@ def load_users_from_mongodb():
         users_collection = db.bot_users
         users = {}
         for user_doc in users_collection.find():
-            user_id = user_doc["user_id"]
+            # Convert user_id to string to match Telegram's string comparison in check_privileges
+            user_id = str(user_doc["user_id"])
             users[user_id] = {
                 "admin": user_doc.get("admin", False),
                 "mode": user_doc.get("mode", "sd"),
@@ -61,12 +62,15 @@ def save_user_to_mongodb(user_id, user_data):
         return False
 
     try:
+        # Convert user_id to int for MongoDB storage (maintains schema consistency)
+        user_id_int = int(user_id)
+
         users_collection = db.bot_users
         users_collection.update_one(
-            {"user_id": user_id},
+            {"user_id": user_id_int},
             {
                 "$set": {
-                    "user_id": user_id,
+                    "user_id": user_id_int,
                     "admin": user_data.get("admin", False),
                     "mode": user_data.get("mode", "sd"),
                     "current_settings": user_data.get("current_settings", {}),
@@ -92,7 +96,8 @@ def load_contacts_from_mongodb():
         contacts_collection = db.bot_contacts
         contacts = {}
         for contact_doc in contacts_collection.find():
-            user_id = contact_doc["user_id"]
+            # Convert user_id to string for consistency with the rest of the bot
+            user_id = str(contact_doc["user_id"])
             contacts[user_id] = contact_doc["last_attempt"]
         logger.info(f"Loaded {len(contacts)} contacts from MongoDB")
         return contacts
