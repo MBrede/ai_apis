@@ -31,7 +31,7 @@ import gc
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from threading import Lock, Timer
+from threading import RLock, Timer
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -72,20 +72,24 @@ class Model_Buffer(ABC):
         self.timeout: int = -1
         self.loaded_at: datetime | None = None
         self.last_accessed: datetime | None = None
-        self._lock: Lock | None = None  # Lazy init - don't create until first use (gunicorn fork safety)
+        self._lock: RLock | None = None  # Lazy init - don't create until first use (gunicorn fork safety)
         logger.info(f"{self.__class__.__name__} initialized")
 
     @property
-    def lock(self) -> Lock:
+    def lock(self) -> RLock:
         """
         Lazy-initialize lock on first access.
 
         This is critical for gunicorn compatibility: Lock objects created before
         fork() are broken in child processes. By creating the lock on first access,
         we ensure it's created in the worker process after fork.
+
+        Uses RLock (reentrant lock) instead of Lock to allow the same thread to
+        acquire the lock multiple times (e.g., get_status() calling is_loaded()).
         """
         if self._lock is None:
-            self._lock = Lock()
+            logger.debug(f"{self.__class__.__name__}: Creating RLock in worker process")
+            self._lock = RLock()
         return self._lock
 
     def is_loaded(self) -> bool:
@@ -95,8 +99,12 @@ class Model_Buffer(ABC):
         Returns:
             bool: True if model is loaded, False otherwise
         """
+        logger.debug(f"{self.__class__.__name__}: is_loaded() called, acquiring lock...")
         with self.lock:
-            return self.model is not None or self.pipeline is not None
+            logger.debug(f"{self.__class__.__name__}: is_loaded() lock acquired")
+            result = self.model is not None or self.pipeline is not None
+            logger.debug(f"{self.__class__.__name__}: is_loaded() = {result}, releasing lock...")
+            return result
 
     def get_status(self) -> dict:
         """
@@ -115,9 +123,13 @@ class Model_Buffer(ABC):
                 'timer_active': True
             }
         """
+        logger.debug(f"{self.__class__.__name__}: get_status() called, acquiring lock...")
         with self.lock:
-            return {
-                "is_loaded": self.is_loaded(),
+            logger.debug(f"{self.__class__.__name__}: get_status() lock acquired, calling is_loaded()...")
+            loaded = self.is_loaded()
+            logger.debug(f"{self.__class__.__name__}: get_status() building response dict...")
+            result = {
+                "is_loaded": loaded,
                 "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
                 "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
                 "timeout_seconds": self.timeout,
@@ -125,6 +137,8 @@ class Model_Buffer(ABC):
                     self.timer is not None and self.timer.is_alive() if self.timer else False
                 ),
             }
+            logger.debug(f"{self.__class__.__name__}: get_status() returning, releasing lock...")
+            return result
 
     def unload_model(self) -> None:
         with self.lock:
