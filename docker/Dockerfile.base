@@ -32,7 +32,7 @@ ENV PATH="/root/.local/bin/:$PATH"
 WORKDIR /app
 
 # Create virtual environment
-RUN python3 -m venv $VIRTUAL_ENV
+RUN uv venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # Copy pyproject.toml and README.md for package installation
