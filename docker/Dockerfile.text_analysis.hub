@@ -23,12 +23,10 @@ COPY .env.example /app/.env
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run text classification API
 CMD ["gunicorn", "src.text_analysis.text_classification_api:app", \
      "--workers", "1", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:8000"]
+     "--bind", "0.0.0.0:8000", \
+     "--timeout", "30000"]

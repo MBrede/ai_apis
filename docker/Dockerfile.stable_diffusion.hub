@@ -26,13 +26,10 @@ RUN mkdir -p /app/loras /app/models
 # Expose port
 EXPOSE 1234
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:1234/health || exit 1
 
 # Run the API
 CMD ["gunicorn", "src.image_generation.stable_diffusion_api:app", \
      "--workers", "1", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:1234", \
-     "--timeout", "300"]
+     "--timeout", "30000"]

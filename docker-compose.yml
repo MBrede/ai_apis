@@ -54,6 +54,11 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1234/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   # Whisper API
   whisper:
@@ -85,6 +90,11 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   # Text Classification API (includes sentiment analysis)
   text_classification:
@@ -114,6 +124,11 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   # Telegram Bot
   telegram_bot:
@@ -140,9 +155,9 @@ services:
       mongodb:
         condition: service_healthy
       stable_diffusion:
-        condition: service_started
+        condition: service_healthy
       whisper:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   mongodb_data:
