@@ -192,10 +192,12 @@ base_settings = {
 
 
 async def check_privileges(update, admin_function=False):
+    global USERS
+    USERS = load_users_from_mongodb()
     user_id = str(update.effective_user.id)
     if user_id not in USERS:
         update_contact_attempts(user_id)
-        await update.message.reply_text(f"You are not on the list, user {user_id}!" f"Now sod off!")
+        await update.message.reply_text(f"You are not on the list, user {user_id}!\n" f"Now sod off!")
         return 0
     elif USERS[user_id]["admin"]:
         return 2
