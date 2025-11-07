@@ -59,13 +59,14 @@ stable-diffusion-only = [
     "pillow>=11.0.0",
     "torchvision>=0.21.0",
     "tqdm>=4.67.1",
-    "python-multipart>=0.0.20"
+    "python-multipart>=0.0.20",
 ]
 
 whisper-only = [
     "openai-whisper>=20250625",
     "pyannote-audio>=4.0.1",
     "ffmpeg-python>=0.2.0",
+    "python-multipart>=0.0.20",
 ]
 
 text-analysis-only = [
