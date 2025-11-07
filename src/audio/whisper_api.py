@@ -5,6 +5,7 @@ To start:
     gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
 
+import logging
 import os
 import subprocess
 import tempfile
@@ -19,6 +20,8 @@ from pyannote.audio import Pipeline
 from src.core.auth import verify_api_key
 from src.core.buffer_class import Model_Buffer
 from src.core.config import config
+
+logger = logging.getLogger(__name__)
 
 
 class WhisperBuffer(Model_Buffer):
@@ -109,13 +112,9 @@ class DiarizationBuffer(Model_Buffer):
             )
 
 
-# Create global buffer instances
+# Create global buffer instances (models load on first request - lazy loading)
 whisper_buffer = WhisperBuffer()
 diarization_buffer = DiarizationBuffer()
-
-# Initialize models
-whisper_buffer.load_model(config.DEFAULT_WHISPER_MODEL)
-diarization_buffer.load_model()
 
 app = FastAPI()
 router = APIRouter()
@@ -168,8 +167,10 @@ async def transcribe(
     file: UploadFile, model_to_use: str = "turbo", api_key: str = Depends(verify_api_key)
 ):
     """Transcribe audio file using Whisper."""
-    # Load the requested model (will reuse if already loaded)
-    whisper_buffer.load_model(model_to_use)
+    # Load the requested model on first request (lazy loading)
+    if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
+        logger.info(f"Loading Whisper model on request: {model_to_use}")
+        whisper_buffer.load_model(model_to_use)
 
     # Save uploaded file temporarily
     with open(file.filename, "wb") as f:
@@ -192,11 +193,15 @@ async def transcribe_diarize(
     api_key: str = Depends(verify_api_key),
 ):
     """Transcribe audio with speaker identification."""
-    # Load the requested Whisper model
-    whisper_buffer.load_model(model_to_use)
+    # Load the requested Whisper model on first request (lazy loading)
+    if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
+        logger.info(f"Loading Whisper model on request: {model_to_use}")
+        whisper_buffer.load_model(model_to_use)
 
-    # Ensure diarization pipeline is loaded
-    diarization_buffer.load_model()
+    # Ensure diarization pipeline is loaded on first request (lazy loading)
+    if not diarization_buffer.is_loaded():
+        logger.info("Loading diarization pipeline on request")
+        diarization_buffer.load_model()
 
     # Save uploaded file temporarily
     with open(file.filename, "wb") as f:
@@ -230,12 +235,22 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffers are functioning.
-    Returns 200 OK when healthy, 503 Service Unavailable when unhealthy.
+    Returns 200 OK when healthy (ready to accept requests).
+    Note: Models load on first request (lazy loading).
     """
+    logger.info("=== WHISPER HEALTH CHECK STARTED ===")
     try:
-        # Test if buffers are accessible and working
+        # Check buffer status
+        logger.info("Whisper health check: About to call whisper_buffer.get_status()...")
         whisper_status = whisper_buffer.get_status()
+        logger.info(f"Whisper health check: whisper_buffer.get_status() returned: {whisper_status}")
+
+        logger.info("Whisper health check: About to call diarization_buffer.get_status()...")
         diarization_status = diarization_buffer.get_status()
+        logger.info(f"Whisper health check: diarization_buffer.get_status() returned: {diarization_status}")
+
+        whisper_loaded = whisper_status.get("is_loaded", False) if whisper_status else False
+        diarization_loaded = diarization_status.get("is_loaded", False) if diarization_status else False
 
         # Check if we can access buffer attributes
         whisper_healthy = whisper_status is not None
@@ -247,18 +262,20 @@ async def health_check():
             "service": "whisper-api",
             "whisper_buffer_accessible": whisper_healthy,
             "diarization_buffer_accessible": diarization_healthy,
-            "whisper_model_loaded": whisper_status.get("is_loaded", False) if whisper_status else False,
-            "diarization_model_loaded": (
-                diarization_status.get("is_loaded", False) if diarization_status else False
-            ),
+            "whisper_model_loaded": whisper_loaded,
+            "diarization_model_loaded": diarization_loaded,
+            "note": "Models will load on first request" if not (whisper_loaded and diarization_loaded) else None,
         }
 
+        logger.info(f"Whisper health check: Returning response: {response_data}")
         # Return 503 if unhealthy, 200 if healthy
         if not is_healthy:
             return JSONResponse(status_code=503, content=response_data)
+        logger.info("=== WHISPER HEALTH CHECK COMPLETED SUCCESSFULLY ===")
         return response_data
 
     except Exception as e:
+        logger.error(f"Whisper health check failed with exception: {e}", exc_info=True)
         return JSONResponse(
             status_code=503,
             content={
