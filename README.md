@@ -29,6 +29,18 @@ Services will be available at:
 docker-compose up -d
 ```
 
+**Fast builds with pre-built base image:**
+
+For faster Docker builds, you can use a pre-built base image with all common dependencies. See [DOCKER.md](DOCKER.md#-fast-setup-with-pre-built-base-image) for details.
+
+```bash
+# Build and push base image once (requires Docker Hub account)
+./scripts/build_and_push_base.sh 1.0.0 yourusername
+
+# Then use *.hub Dockerfiles for 5x faster builds
+docker build -f docker/Dockerfile.stable_diffusion.hub -t ai_apis_sd:latest .
+```
+
 ### Manual Installation
 
 First, install uv (fast Python package installer):

@@ -9,6 +9,49 @@ Complete guide for running AI APIs in Docker containers with GPU support and Mon
 - **Docker Compose**: 2.0+
 - **NVIDIA Docker Runtime**: For GPU support
 
+## 🚀 Fast Setup with Pre-built Base Image
+
+For faster builds and deployments, you can build a base image once and push it to Docker Hub. This base image contains all common dependencies (Python, CUDA, uv, system packages) and can significantly speed up subsequent builds.
+
+### Building and Pushing Base Image
+
+```bash
+# Build and push to Docker Hub (requires Docker Hub account)
+./scripts/build_and_push_base.sh 1.0.0 yourdockerhubusername
+
+# The script will:
+# 1. Build the base image with all common dependencies
+# 2. Tag it with version and 'latest'
+# 3. Push to Docker Hub: yourdockerhubusername/ai-apis-base:1.0.0
+# 4. Scan for vulnerabilities (if Trivy is installed)
+```
+
+### Using Pre-built Base Image
+
+Once pushed, you can use the faster `.hub` Dockerfiles:
+
+```bash
+# Update the FROM line in docker/Dockerfile.*.hub files with your username
+sed -i 's/yourusername/actualdockerhubusername/g' docker/Dockerfile.*.hub
+
+# Build services using the pre-built base (much faster!)
+docker build -f docker/Dockerfile.stable_diffusion.hub -t ai_apis_sd:latest .
+docker build -f docker/Dockerfile.whisper.hub -t ai_apis_whisper:latest .
+docker build -f docker/Dockerfile.text_analysis.hub -t ai_apis_text:latest .
+```
+
+**Benefits:**
+- ⚡ **Faster builds**: Skip reinstalling Python, CUDA, uv, and system packages
+- 🔄 **Consistency**: All services use the same base environment
+- 💾 **Smaller layers**: Service-specific changes are in smaller layers
+- 🚀 **CI/CD friendly**: Ideal for automated deployments
+
+**When to rebuild base image:**
+- Python version upgrade
+- CUDA version change
+- System package updates
+- uv version upgrade
+
 ### Install NVIDIA Docker Runtime
 
 ```bash
