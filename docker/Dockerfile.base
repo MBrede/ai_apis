@@ -30,7 +30,7 @@ RUN python -m pip install --upgrade pip setuptools wheel
 WORKDIR /app
 
 # Copy requirements
-COPY pyproject.toml /app/
+COPY pyproject.toml README.md /app/
 
 # Install Python dependencies
 RUN pip install -e /app

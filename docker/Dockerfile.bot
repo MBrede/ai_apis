@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy and install dependencies
-COPY pyproject.toml /app/
+COPY pyproject.toml README.md /app/
 RUN pip install --upgrade pip && pip install -e "/app[bot]"
 
 # Copy source code

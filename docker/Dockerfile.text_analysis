@@ -20,7 +20,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 WORKDIR /app
 
 # Copy and install dependencies
-COPY pyproject.toml /app/
+COPY pyproject.toml README.md /app/
 RUN pip install --upgrade pip && pip install -e "/app[text-analysis]"
 
 # Copy source code
