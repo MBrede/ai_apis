@@ -25,6 +25,7 @@ from diffusers import (
     StableDiffusionXLPipeline,
 )
 from fastapi import APIRouter, Depends, FastAPI, File, Response, UploadFile
+from fastapi.responses import JSONResponse
 from PIL import Image
 from pydantic import BaseModel
 from tqdm import tqdm
@@ -478,6 +479,7 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffer is functioning.
+    Returns 200 OK when healthy, 503 Service Unavailable when unhealthy.
     """
     try:
         # Test if buffer is accessible and working
@@ -486,18 +488,27 @@ async def health_check():
         # Check if we can access buffer attributes
         is_healthy = buffer_status is not None
 
-        return {
+        response_data = {
             "status": "healthy" if is_healthy else "unhealthy",
             "service": "stable-diffusion-api",
             "buffer_accessible": is_healthy,
             "model_loaded": buffer_status.get("is_loaded", False) if buffer_status else False,
         }
+
+        # Return 503 if unhealthy, 200 if healthy
+        if not is_healthy:
+            return JSONResponse(status_code=503, content=response_data)
+        return response_data
+
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "service": "stable-diffusion-api",
-            "error": str(e),
-        }
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "service": "stable-diffusion-api",
+                "error": str(e),
+            },
+        )
 
 
 app.include_router(router)
