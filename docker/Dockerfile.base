@@ -25,7 +25,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 &
 
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+RUN source $HOME/.local/bin/env
 
 # Create app directory
 WORKDIR /app
