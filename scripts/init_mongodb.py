@@ -225,9 +225,7 @@ def init_mongodb(
                 "user_id": add_user_id,
                 "admin": True,
                 "mode": "sd",
-                "current_settings": user_settings,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "current_settings": user_settings
             }
 
             if username:
@@ -236,7 +234,7 @@ def init_mongodb(
             try:
                 result = bot_users_collection.update_one(
                     {"user_id": add_user_id},
-                    {"$set": user_doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
+                    {"$set": user_doc, "$setOnInsert": {"created_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
                     upsert=True,
                 )
                 if result.upserted_id:
