@@ -31,7 +31,7 @@ import gc
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from threading import RLock, Timer
+from threading import Timer
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -72,25 +72,7 @@ class Model_Buffer(ABC):
         self.timeout: int = -1
         self.loaded_at: datetime | None = None
         self.last_accessed: datetime | None = None
-        self._lock: RLock | None = None  # Lazy init - don't create until first use (gunicorn fork safety)
         logger.info(f"{self.__class__.__name__} initialized")
-
-    @property
-    def lock(self) -> RLock:
-        """
-        Lazy-initialize lock on first access.
-
-        This is critical for gunicorn compatibility: Lock objects created before
-        fork() are broken in child processes. By creating the lock on first access,
-        we ensure it's created in the worker process after fork.
-
-        Uses RLock (reentrant lock) instead of Lock to allow the same thread to
-        acquire the lock multiple times (e.g., get_status() calling is_loaded()).
-        """
-        if self._lock is None:
-            logger.debug(f"{self.__class__.__name__}: Creating RLock in worker process")
-            self._lock = RLock()
-        return self._lock
 
     def is_loaded(self) -> bool:
         """
@@ -99,12 +81,10 @@ class Model_Buffer(ABC):
         Returns:
             bool: True if model is loaded, False otherwise
         """
-        logger.debug(f"{self.__class__.__name__}: is_loaded() called, acquiring lock...")
-        with self.lock:
-            logger.debug(f"{self.__class__.__name__}: is_loaded() lock acquired")
-            result = self.model is not None or self.pipeline is not None
-            logger.debug(f"{self.__class__.__name__}: is_loaded() = {result}, releasing lock...")
-            return result
+        logger.debug(f"{self.__class__.__name__}: is_loaded() called")
+        result = self.model is not None or self.pipeline is not None
+        logger.debug(f"{self.__class__.__name__}: is_loaded() = {result}")
+        return result
 
     def get_status(self) -> dict:
         """
@@ -123,35 +103,28 @@ class Model_Buffer(ABC):
                 'timer_active': True
             }
         """
-        logger.debug(f"{self.__class__.__name__}: get_status() called, acquiring lock...")
-        with self.lock:
-            logger.debug(f"{self.__class__.__name__}: get_status() lock acquired, calling is_loaded()...")
-            loaded = self.is_loaded()
-            logger.debug(f"{self.__class__.__name__}: get_status() building response dict...")
-            result = {
-                "is_loaded": loaded,
-                "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
-                "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
-                "timeout_seconds": self.timeout,
-                "timer_active": (
-                    self.timer is not None and self.timer.is_alive() if self.timer else False
-                ),
-            }
-            logger.debug(f"{self.__class__.__name__}: get_status() returning, releasing lock...")
-            return result
+        logger.debug(f"{self.__class__.__name__}: get_status() called")
+        return {
+            "is_loaded": self.is_loaded(),
+            "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
+            "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
+            "timeout_seconds": self.timeout,
+            "timer_active": (
+                self.timer is not None and self.timer.is_alive() if self.timer else False
+            ),
+        }
 
     def unload_model(self) -> None:
-        with self.lock:
-            logger.info(f"{self.__class__.__name__}: Unloading model")
+        logger.info(f"{self.__class__.__name__}: Unloading model")
 
-            timer_to_cancel = self.timer
-            self.timer = None
+        timer_to_cancel = self.timer
+        self.timer = None
 
-            self.model = None
-            self.pipeline = None
-            self.tokenizer = None
-            self.loaded_at = None
-            self.last_accessed = None
+        self.model = None
+        self.pipeline = None
+        self.tokenizer = None
+        self.loaded_at = None
+        self.last_accessed = None
 
         if timer_to_cancel is not None:
             try:
@@ -173,7 +146,7 @@ class Model_Buffer(ABC):
         Reset the unload timer to prevent premature model unloading.
 
         Call this method every time the model is accessed/used to extend
-        its lifetime. The timer is thread-safe and can be reset while active.
+        its lifetime.
 
         Args:
             timeout: Optional new timeout duration. If None, uses existing timeout.
@@ -182,30 +155,29 @@ class Model_Buffer(ABC):
             >>> buffer.reset_timer()  # Reset with current timeout
             >>> buffer.reset_timer(600)  # Reset with new 10-minute timeout
         """
-        with self.lock:
-            # Update last accessed time
-            self.last_accessed = datetime.now()
+        # Update last accessed time
+        self.last_accessed = datetime.now()
 
-            # Update timeout if provided
-            if timeout is not None:
-                self.timeout = timeout
+        # Update timeout if provided
+        if timeout is not None:
+            self.timeout = timeout
 
-            # Only reset timer if timeout is positive
-            if self.timeout <= 0:
-                return
+        # Only reset timer if timeout is positive
+        if self.timeout <= 0:
+            return
 
-            # Cancel existing timer
-            if self.timer is not None:
-                try:
-                    self.timer.cancel()
-                except Exception as e:
-                    logger.warning(f"Error canceling timer during reset: {e}")
+        # Cancel existing timer
+        if self.timer is not None:
+            try:
+                self.timer.cancel()
+            except Exception as e:
+                logger.warning(f"Error canceling timer during reset: {e}")
 
-            # Create and start new timer
-            self.timer = Timer(self.timeout, self.unload_model)
-            self.timer.daemon = True  # Don't prevent program exit
-            self.timer.start()
-            logger.debug(f"Timer reset: {self.timeout}s until unload")
+        # Create and start new timer
+        self.timer = Timer(self.timeout, self.unload_model)
+        self.timer.daemon = True  # Don't prevent program exit
+        self.timer.start()
+        logger.debug(f"Timer reset: {self.timeout}s until unload")
 
     def cancel_timer(self) -> None:
         """
@@ -217,15 +189,14 @@ class Model_Buffer(ABC):
         Example:
             >>> buffer.cancel_timer()  # Model stays loaded until manual unload
         """
-        with self.lock:
-            if self.timer is not None:
-                try:
-                    self.timer.cancel()
-                    logger.debug("Timer cancelled")
-                except Exception as e:
-                    logger.warning(f"Error canceling timer: {e}")
-                self.timer = None
-                self.timeout = -1
+        if self.timer is not None:
+            try:
+                self.timer.cancel()
+                logger.debug("Timer cancelled")
+            except Exception as e:
+                logger.warning(f"Error canceling timer: {e}")
+            self.timer = None
+            self.timeout = -1
 
     @abstractmethod
     def load_model(self, *args, timeout: int = 300, **kwargs) -> None:
@@ -267,22 +238,21 @@ class Model_Buffer(ABC):
                     logger.info("Model already loaded, resetting timer")
                     self.reset_timer(timeout)
         """
-        with self.lock:
-            # Cancel any existing timer
-            if self.timer is not None:
-                self.timer.cancel()
-                self.timer = None
+        # Cancel any existing timer
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
 
-            # Set timeout
-            self.timeout = timeout
+        # Set timeout
+        self.timeout = timeout
 
-            # Create timer if timeout is positive (but don't start yet - subclass does that)
-            if timeout > 0:
-                self.timer = Timer(timeout, self.unload_model)
-                self.timer.daemon = True
-                logger.info(f"Timer configured: {timeout}s until unload")
-            else:
-                logger.info("Auto-unload disabled (timeout <= 0)")
+        # Create timer if timeout is positive (but don't start yet - subclass does that)
+        if timeout > 0:
+            self.timer = Timer(timeout, self.unload_model)
+            self.timer.daemon = True
+            logger.info(f"Timer configured: {timeout}s until unload")
+        else:
+            logger.info("Auto-unload disabled (timeout <= 0)")
 
     def __enter__(self):
         """
