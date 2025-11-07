@@ -6,13 +6,15 @@ Creates initial database structure, adds default API keys, and manages admin use
 Run this after starting MongoDB for the first time.
 
 Usage:
-    python scripts/init_mongodb.py setup [--add-user USER_ID] [--username NAME]
-    python scripts/init_mongodb.py add-user USER_ID [--username NAME]
-    python scripts/init_mongodb.py setup --add-user USER_ID --username NAME
+    python scripts/init_mongodb.py setup [--add-user USER_ID] [--username NAME] [--settings-file FILE]
+    python scripts/init_mongodb.py add-user USER_ID [--username NAME] [--settings-file FILE]
 
 Examples:
-    # Setup database and add admin user
+    # Setup database and add admin user with default settings
     python scripts/init_mongodb.py setup --add-user 123456789 --username "admin"
+
+    # Setup with custom SD settings from JSON file
+    python scripts/init_mongodb.py setup --add-user 123456789 --settings-file scripts/default_sd_settings.json
 
     # Add admin user to existing database
     python scripts/init_mongodb.py add-user 123456789 --username "admin"
@@ -22,6 +24,7 @@ Examples:
 """
 
 import argparse
+import json
 import sys
 import os
 from datetime import datetime
@@ -29,6 +32,21 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+# Default Stable Diffusion settings for new users
+DEFAULT_SD_SETTINGS = {
+    "model_id": "stabilityai/stable-diffusion-2-1",
+    "torch_dtype": "float16",
+    "num_inference_steps": 20,
+    "count_returned": 1,
+    "seed": -1,
+    "guidance_scale": 9.0,
+    "negative_prompt": "blurry, low resolution, low quality",
+    "width": 1024,
+    "height": 1024,
+    "lora": "",
+}
 
 
 def get_mongo_connection():
@@ -46,7 +64,12 @@ def get_mongo_connection():
     return mongodb_url, mongodb_db, mongodb_admin, mongodb_pw
 
 
-def add_telegram_user(user_id: int, username: str | None = None, is_admin: bool = True) -> bool:
+def add_telegram_user(
+    user_id: int,
+    username: str | None = None,
+    is_admin: bool = True,
+    settings: dict | None = None,
+) -> bool:
     """
     Add a Telegram user to MongoDB bot_users collection.
 
@@ -54,6 +77,7 @@ def add_telegram_user(user_id: int, username: str | None = None, is_admin: bool 
         user_id: Telegram user ID
         username: Optional username for the user
         is_admin: Whether the user should have admin privileges (default: True)
+        settings: Optional custom settings dict for SD parameters (default: DEFAULT_SD_SETTINGS)
 
     Returns:
         bool: True if successful, False otherwise
@@ -74,12 +98,15 @@ def add_telegram_user(user_id: int, username: str | None = None, is_admin: bool 
         # Get bot_users collection
         bot_users_collection = db.bot_users
 
+        # Use provided settings or default
+        user_settings = settings if settings is not None else DEFAULT_SD_SETTINGS.copy()
+
         # Create user document
         user_doc = {
             "user_id": user_id,
             "admin": is_admin,
             "mode": "sd",  # Default mode
-            "current_settings": {},
+            "current_settings": user_settings,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         }
@@ -98,8 +125,10 @@ def add_telegram_user(user_id: int, username: str | None = None, is_admin: bool 
             print(f"✓ Added new {'admin' if is_admin else 'regular'} user: {user_id}")
             if username:
                 print(f"  Username: {username}")
+            print(f"  Settings: {user_settings}")
         else:
             print(f"✓ Updated existing user: {user_id}")
+            print(f"  Settings: {user_settings}")
 
         client.close()
         return True
@@ -109,13 +138,16 @@ def add_telegram_user(user_id: int, username: str | None = None, is_admin: bool 
         return False
 
 
-def init_mongodb(add_user_id: int | None = None, username: str | None = None):
+def init_mongodb(
+    add_user_id: int | None = None, username: str | None = None, settings: dict | None = None
+):
     """
     Initialize MongoDB with collections and indexes.
 
     Args:
         add_user_id: Optional Telegram user ID to add as admin during setup
         username: Optional username for the admin user
+        settings: Optional custom SD settings dict (default: DEFAULT_SD_SETTINGS)
     """
     # Get MongoDB connection details
     mongodb_url, mongodb_db, mongodb_admin, mongodb_pw = get_mongo_connection()
@@ -188,11 +220,14 @@ def init_mongodb(add_user_id: int | None = None, username: str | None = None):
 
         # Add admin user if provided
         if add_user_id:
+            # Use provided settings or default
+            user_settings = settings if settings is not None else DEFAULT_SD_SETTINGS.copy()
+
             user_doc = {
                 "user_id": add_user_id,
                 "admin": True,
                 "mode": "sd",
-                "current_settings": {},
+                "current_settings": user_settings,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
             }
@@ -208,8 +243,10 @@ def init_mongodb(add_user_id: int | None = None, username: str | None = None):
                 )
                 if result.upserted_id:
                     print(f"✓ Added admin user: {add_user_id}" + (f" ({username})" if username else ""))
+                    print(f"  SD settings applied: {user_settings}")
                 else:
                     print(f"✓ Updated admin user: {add_user_id}" + (f" ({username})" if username else ""))
+                    print(f"  SD settings applied: {user_settings}")
             except Exception as e:
                 print(f"✗ Error adding admin user: {e}")
 
@@ -283,14 +320,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Setup database with admin user
+  # Setup database with admin user and default SD settings
   %(prog)s setup --add-user 123456789 --username "admin"
+
+  # Setup with custom SD settings from JSON file
+  %(prog)s setup --add-user 123456789 --settings-file scripts/default_sd_settings.json
 
   # Setup database with admin user from environment
   ADMIN_TELEGRAM_USER_ID=123456789 %(prog)s setup
 
-  # Add admin user to existing database
-  %(prog)s add-user 123456789 --username "admin"
+  # Add admin user to existing database with custom settings
+  %(prog)s add-user 123456789 --username "admin" --settings-file custom_settings.json
 
   # Just setup database (no admin user)
   %(prog)s setup
@@ -313,6 +353,12 @@ Examples:
     setup_parser.add_argument(
         "--username", type=str, metavar="NAME", help="Username for the admin user"
     )
+    setup_parser.add_argument(
+        "--settings-file",
+        type=str,
+        metavar="FILE",
+        help="JSON file with custom SD settings (optional)",
+    )
 
     # Add-user command
     add_user_parser = subparsers.add_parser(
@@ -321,6 +367,12 @@ Examples:
     add_user_parser.add_argument("user_id", type=int, help="Telegram user ID")
     add_user_parser.add_argument(
         "--username", type=str, metavar="NAME", help="Username for the admin user"
+    )
+    add_user_parser.add_argument(
+        "--settings-file",
+        type=str,
+        metavar="FILE",
+        help="JSON file with custom SD settings (optional)",
     )
 
     args = parser.parse_args()
@@ -335,6 +387,20 @@ Examples:
     # Check for environment variable for admin user
     env_user_id = os.getenv("ADMIN_TELEGRAM_USER_ID")
     env_username = os.getenv("ADMIN_TELEGRAM_USERNAME")
+
+    # Load settings from file if provided
+    settings = None
+    if hasattr(args, "settings_file") and args.settings_file:
+        try:
+            with open(args.settings_file, "r") as f:
+                settings = json.load(f)
+            print(f"✓ Loaded custom settings from: {args.settings_file}")
+        except FileNotFoundError:
+            print(f"✗ Settings file not found: {args.settings_file}")
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"✗ Invalid JSON in settings file: {e}")
+            sys.exit(1)
 
     if args.command == "setup":
         # Determine user_id and username
@@ -353,7 +419,7 @@ Examples:
             username = env_username
             print(f"Using username from environment: {username}")
 
-        init_mongodb(add_user_id=user_id, username=username)
+        init_mongodb(add_user_id=user_id, username=username, settings=settings)
 
     elif args.command == "add-user":
         user_id = args.user_id
@@ -364,7 +430,7 @@ Examples:
             username = env_username
             print(f"Using username from environment: {username}")
 
-        success = add_telegram_user(user_id, username)
+        success = add_telegram_user(user_id, username, settings=settings)
         sys.exit(0 if success else 1)
 
 

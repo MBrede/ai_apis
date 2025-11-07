@@ -1,0 +1,12 @@
+{
+  "model_id": "stabilityai/stable-diffusion-2-1",
+  "torch_dtype": "float16",
+  "num_inference_steps": 20,
+  "count_returned": 1,
+  "seed": -1,
+  "guidance_scale": 9.0,
+  "negative_prompt": "blurry, low resolution, low quality",
+  "width": 1024,
+  "height": 1024,
+  "lora": ""
+}
