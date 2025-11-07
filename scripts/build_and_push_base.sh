@@ -1,7 +1,18 @@
 #!/bin/bash
 #
 # Build and push base Docker image to Docker Hub
-# This base image contains common dependencies for all AI API services
+#
+# This base image contains ONLY system-level dependencies:
+#   - Python 3.12
+#   - CUDA 13.0.2 + cuDNN
+#   - uv (Python package installer)
+#   - System packages (ffmpeg, git, curl, etc.)
+#
+# Python packages are installed in each service-specific Dockerfile.
+# This approach allows:
+#   - ONE base image for ALL services (no duplication)
+#   - Each service installs only the Python packages it needs
+#   - Smaller base image that changes infrequently
 #
 # Usage:
 #   ./scripts/build_and_push_base.sh [VERSION] [DOCKERHUB_USERNAME]

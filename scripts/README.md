@@ -4,7 +4,7 @@ Utility scripts for building, deploying, and managing the AI APIs project.
 
 ## build_and_push_base.sh
 
-Builds and pushes the base Docker image to Docker Hub. This base image contains all common dependencies and significantly speeds up subsequent service builds.
+Builds and pushes the base Docker image to Docker Hub. This base image contains system dependencies AND common Python packages (api-core, ml-base) shared by all ML APIs, significantly speeding up subsequent service builds.
 
 ### Prerequisites
 
@@ -59,9 +59,14 @@ The script creates and pushes:
 | From scratch | ~10-15 min | First build, major updates |
 | From base image | ~2-3 min | Service updates, code changes |
 
-**Storage Savings:**
-- Base image: ~8-10 GB (built once)
-- Service images: ~500 MB each (just code + service deps)
+**Storage & Package Distribution:**
+- Base image: ~5-6 GB (system + api-core + ml-base with torch)
+  - Built once, shared by all services
+  - Contains: Python, CUDA, uv, FastAPI, torch, numpy
+- Service images: +1-3 GB each (service-specific packages only)
+  - stable-diffusion: +diffusers, transformers, accelerate (~2-3 GB)
+  - whisper: +openai-whisper, pyannote-audio (~500 MB)
+  - text-analysis: +transformers, setfit (~1-2 GB)
 
 ### Using the Base Image
 
@@ -74,7 +79,9 @@ FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 
 # Use:
 FROM myusername/ai-apis-base:latest
-# Only copy and configure your service
+# Base already has: Python, CUDA, uv, FastAPI, torch, numpy
+# Only install service-specific packages
+RUN uv pip install -e "/app[stable-diffusion-only]"
 ```
 
 Or use the provided `.hub` Dockerfiles in the `docker/` directory:

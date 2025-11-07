@@ -11,7 +11,29 @@ Complete guide for running AI APIs in Docker containers with GPU support and Mon
 
 ## 🚀 Fast Setup with Pre-built Base Image
 
-For faster builds and deployments, you can build a base image once and push it to Docker Hub. This base image contains all common dependencies (Python, CUDA, uv, system packages) and can significantly speed up subsequent builds.
+For faster builds and deployments, you can build ONE base image and push it to Docker Hub. This base image contains system dependencies AND common Python packages shared by all ML APIs.
+
+### What's in the Base Image?
+
+**System dependencies:**
+- Python 3.12
+- CUDA 13.0.2 + cuDNN (for GPU support)
+- uv (fast Python package installer)
+- System packages (ffmpeg, git, curl, ca-certificates, etc.)
+
+**Common Python packages** (shared by ALL ML APIs):
+- **api-core**: FastAPI, uvicorn, gunicorn, pydantic
+- **ml-base**: torch (~2.5 GB), numpy
+
+**NOT included** (installed per-service):
+- Service-specific packages (transformers, diffusers, whisper, setfit, etc.)
+- Application code
+
+This approach means:
+- ✅ **ONE** base image for **ALL** services (no duplication)
+- ✅ Heavy common packages (torch, FastAPI) installed once (~5-6 GB base)
+- ✅ Each service only installs lightweight service-specific packages
+- ✅ Base image changes only when Python/CUDA/torch versions upgrade
 
 ### Building and Pushing Base Image
 
@@ -20,7 +42,7 @@ For faster builds and deployments, you can build a base image once and push it t
 ./scripts/build_and_push_base.sh 1.0.0 yourdockerhubusername
 
 # The script will:
-# 1. Build the base image with all common dependencies
+# 1. Build the base image with system deps + common packages (api-core, ml-base)
 # 2. Tag it with version and 'latest'
 # 3. Push to Docker Hub: yourdockerhubusername/ai-apis-base:1.0.0
 # 4. Scan for vulnerabilities (if Trivy is installed)
@@ -38,19 +60,46 @@ sed -i 's/yourusername/actualdockerhubusername/g' docker/Dockerfile.*.hub
 docker build -f docker/Dockerfile.stable_diffusion.hub -t ai_apis_sd:latest .
 docker build -f docker/Dockerfile.whisper.hub -t ai_apis_whisper:latest .
 docker build -f docker/Dockerfile.text_analysis.hub -t ai_apis_text:latest .
+docker build -f docker/Dockerfile.bot.hub -t ai_apis_bot:latest .
 ```
 
+**Build time comparison:**
+
+| Build Type | First Build | Rebuild (code change) |
+|------------|-------------|----------------------|
+| Without base | ~15-20 min | ~15-20 min |
+| With base (initial) | ~3-5 min* | ~2-3 min |
+
+*After base image is pulled once
+
 **Benefits:**
-- ⚡ **Faster builds**: Skip reinstalling Python, CUDA, uv, and system packages
-- 🔄 **Consistency**: All services use the same base environment
-- 💾 **Smaller layers**: Service-specific changes are in smaller layers
-- 🚀 **CI/CD friendly**: Ideal for automated deployments
+- ⚡ **3-5x faster builds**: Skip reinstalling system packages
+- 🔄 **Consistency**: All services use identical system environment
+- 💾 **Efficient caching**: System deps cached once, Python packages per-service
+- 🚀 **CI/CD friendly**: Fast iterations, clear separation of concerns
 
 **When to rebuild base image:**
 - Python version upgrade
 - CUDA version change
-- System package updates
+- PyTorch version upgrade
+- FastAPI or other api-core package major updates
+- System package updates (ffmpeg, git, etc.)
 - uv version upgrade
+
+Typically once every few months, not on every code change.
+
+**Package installation breakdown:**
+```
+Base image (~5-6 GB):
+  - System: Python, CUDA, uv, ffmpeg, git, etc.
+  - api-core: FastAPI, uvicorn, gunicorn, pydantic (~100 MB)
+  - ml-base: torch (~2.5 GB), numpy (~50 MB)
+
+Per-service (additional):
+  - stable-diffusion-only: diffusers, transformers, accelerate, etc. (~2-3 GB)
+  - whisper-only: openai-whisper, pyannote-audio (~500 MB)
+  - text-analysis-only: transformers, setfit, huggingface-hub (~1-2 GB)
+```
 
 ### Install NVIDIA Docker Runtime
 

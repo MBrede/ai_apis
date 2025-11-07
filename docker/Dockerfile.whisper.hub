@@ -1,5 +1,5 @@
 # Whisper API Docker image using pre-built base from Docker Hub
-# This significantly speeds up builds by using a pre-built base image with common dependencies
+# Base image already contains: Python, CUDA, uv, system packages, api-core (FastAPI etc.), ml-base (torch, numpy)
 #
 # To use this Dockerfile:
 # 1. Build and push base image: ./scripts/build_and_push_base.sh 1.0.0 yourusername
@@ -11,13 +11,15 @@ FROM yourusername/ai-apis-base:latest
 
 WORKDIR /app
 
-# Copy only what's needed for this service
+# Install only service-specific packages (base already has api-core and ml-base)
+# This installs: openai-whisper, pyannote-audio, ffmpeg-python
+COPY pyproject.toml README.md /app/
+RUN uv pip install -e "/app[whisper-only]"
+
+# Copy source code
 COPY src/core/ /app/src/core/
 COPY src/audio/ /app/src/audio/
 COPY .env.example /app/.env
-
-# Install service-specific dependencies if any
-# RUN uv pip install additional-package-here
 
 # Expose port
 EXPOSE 8080

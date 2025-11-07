@@ -44,42 +44,52 @@ api-core = [
     "pydantic>=2.10.5",
 ]
 
-# Stable Diffusion API
-stable-diffusion = [
-    "ai-apis[api-core]",
+# ML Base (common ML packages shared across all ML APIs)
+ml-base = [
     "torch>=2.6.0",
+    "numpy>=2.2.1",
+]
+
+# Service-specific packages (without base dependencies)
+# These are used when building from pre-built base image that already has api-core and ml-base
+stable-diffusion-only = [
     "diffusers>=0.31.0",
     "transformers>=4.57.1",
     "accelerate>=1.2.1",
     "pillow>=11.0.0",
     "torchvision>=0.21.0",
-    "numpy>=2.2.1",
     "tqdm>=4.67.1",
 ]
 
-# Whisper Audio API
-whisper = [
-    "ai-apis[api-core]",
-    "torch>=2.6.0",
+whisper-only = [
     "openai-whisper>=20250625",
     "pyannote-audio>=4.0.1",
     "ffmpeg-python>=0.2.0",
-    "numpy>=2.2.1",
 ]
 
-# Text Analysis API
-text-analysis = [
-    "ai-apis[api-core]",
-    "torch>=2.6.0",
+text-analysis-only = [
     "transformers>=4.57.1",
     "setfit>=1.1.3",
     "huggingface-hub>=0.26.5",
-    "numpy>=2.2.1",
+]
+
+# Full service dependencies (including base)
+# These are used when building from scratch without pre-built base image
+stable-diffusion = [
+    "ai-apis[api-core,ml-base,stable-diffusion-only]",
+]
+
+whisper = [
+    "ai-apis[api-core,ml-base,whisper-only]",
+]
+
+text-analysis = [
+    "ai-apis[api-core,ml-base,text-analysis-only]",
 ]
 
 # LLM Training/Fine-tuning
 llm-training = [
-    "torch>=2.6.0",
+    "ai-apis[ml-base]",
     "transformers>=4.57.1",
     "unsloth>=2025.11.1",
     "trl>=0.13.0",

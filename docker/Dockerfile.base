@@ -30,22 +30,22 @@ ENV PATH="/root/.cargo/bin:$PATH"
 # Create app directory
 WORKDIR /app
 
-# Copy requirements
+# Copy pyproject.toml and README.md for package installation
 COPY pyproject.toml README.md /app/
 
-# Install Python dependencies
-RUN uv pip install -e /app
+# Install common packages shared by all ML APIs:
+# - api-core: FastAPI, uvicorn, gunicorn, pydantic
+# - ml-base: torch, numpy
+# This allows ONE base image for ALL services with common heavy dependencies pre-installed.
+# Service-specific packages (transformers, diffusers, whisper, etc.) are installed per-service.
+RUN uv pip install -e "/app[api-core,ml-base]"
 
-# Copy source code
-COPY src/ /app/src/
-COPY .env.example /app/.env.example
-
-# Create non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
-
-USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/docs || exit 1
+# Base image now contains:
+# - System dependencies (Python, CUDA, uv, ffmpeg, git, etc.)
+# - Common API packages (FastAPI, uvicorn, gunicorn, pydantic)
+# - Common ML packages (torch, numpy)
+#
+# Service-specific Dockerfiles only need to install their unique packages:
+# - stable-diffusion: diffusers, transformers, accelerate, etc.
+# - whisper: openai-whisper, pyannote-audio, ffmpeg-python
+# - text-analysis: transformers, setfit, huggingface-hub
