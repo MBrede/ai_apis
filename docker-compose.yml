@@ -20,6 +20,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # Stable Diffusion API
   stable_diffusion:
@@ -59,6 +60,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 300s
 
   # Whisper API
   whisper:
@@ -95,6 +97,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 300s
 
   # Text Classification API (includes sentiment analysis)
   text_classification:
@@ -129,6 +132,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 300s
 
   # Telegram Bot
   telegram_bot:

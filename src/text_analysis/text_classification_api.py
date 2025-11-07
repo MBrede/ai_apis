@@ -3,6 +3,7 @@ from datetime import datetime
 import torch
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import JSONResponse
 from huggingface_hub import hf_api
 from setfit import SetFitModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -121,6 +122,7 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffer is functioning.
+    Returns 200 OK when healthy, 503 Service Unavailable when unhealthy.
     """
     try:
         # Test if buffer is accessible and working
@@ -129,18 +131,27 @@ async def health_check():
         # Check if we can access buffer attributes
         is_healthy = buffer_status is not None
 
-        return {
+        response_data = {
             "status": "healthy" if is_healthy else "unhealthy",
             "service": "text-classification-api",
             "buffer_accessible": is_healthy,
             "model_loaded": buffer_status.get("is_loaded", False) if buffer_status else False,
         }
+
+        # Return 503 if unhealthy, 200 if healthy
+        if not is_healthy:
+            return JSONResponse(status_code=503, content=response_data)
+        return response_data
+
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "service": "text-classification-api",
-            "error": str(e),
-        }
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "service": "text-classification-api",
+                "error": str(e),
+            },
+        )
 
 
 app.include_router(router)

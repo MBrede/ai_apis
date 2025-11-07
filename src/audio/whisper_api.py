@@ -13,6 +13,7 @@ from datetime import datetime
 import torch
 import whisper
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from pyannote.audio import Pipeline
 
 from src.core.auth import verify_api_key
@@ -229,6 +230,7 @@ async def health_check():
     """
     Health check endpoint for Docker HEALTHCHECK.
     Tests if API is running and buffers are functioning.
+    Returns 200 OK when healthy, 503 Service Unavailable when unhealthy.
     """
     try:
         # Test if buffers are accessible and working
@@ -240,7 +242,7 @@ async def health_check():
         diarization_healthy = diarization_status is not None
         is_healthy = whisper_healthy and diarization_healthy
 
-        return {
+        response_data = {
             "status": "healthy" if is_healthy else "unhealthy",
             "service": "whisper-api",
             "whisper_buffer_accessible": whisper_healthy,
@@ -250,12 +252,21 @@ async def health_check():
                 diarization_status.get("is_loaded", False) if diarization_status else False
             ),
         }
+
+        # Return 503 if unhealthy, 200 if healthy
+        if not is_healthy:
+            return JSONResponse(status_code=503, content=response_data)
+        return response_data
+
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "service": "whisper-api",
-            "error": str(e),
-        }
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "service": "whisper-api",
+                "error": str(e),
+            },
+        )
 
 
 app.include_router(router)
