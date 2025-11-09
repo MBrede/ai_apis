@@ -136,13 +136,13 @@ class APIConfig:
     # =============================================================================
 
     # Default OLLAMA model for chat
-    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.3")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama4_long:latest")
 
     # OLLAMA temperature
-    OLLAMA_TEMPERATURE: float = float(os.getenv("OLLAMA_TEMPERATURE", "0.7"))
+    OLLAMA_TEMPERATURE: float = float(os.getenv("OLLAMA_TEMPERATURE", "0.2"))
 
     # OLLAMA max tokens
-    OLLAMA_MAX_TOKENS: int = int(os.getenv("OLLAMA_MAX_TOKENS", "2000"))
+    OLLAMA_MAX_TOKENS: int = int(os.getenv("OLLAMA_MAX_TOKENS", "5000"))
 
     @classmethod
     def validate(cls) -> list[str]:

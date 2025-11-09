@@ -146,9 +146,9 @@ services:
       - API_KEY=${API_KEY:-your-api-key-here}
       - OLLAMA_HOST=${OLLAMA_HOST:-149.222.209.66}
       - OLLAMA_PORT=${OLLAMA_PORT:-2345}
-      - SD_HOST=${SD_HOST:-stable_diffusion}
+      - SD_HOST=stable_diffusion
       - SD_PORT=${SD_PORT:-1234}
-      - WHISPER_HOST=${WHISPER_HOST:-whisper}
+      - WHISPER_HOST=whisper
       - WHISPER_PORT=${WHISPER_PORT:-8080}
       - USE_MONGODB=${USE_MONGODB:-true}
       - MONGODB_URL=mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/
