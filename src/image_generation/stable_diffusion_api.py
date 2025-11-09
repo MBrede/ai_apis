@@ -196,12 +196,12 @@ class DiffusionModel(Model_Buffer):
 
     def _load_flux_pipeline(self):
         self.loaded_pipeline = "flux"
-        pipe = FluxPipeline.from_pretrained(
+        pipeline = FluxPipeline.from_pretrained(
             self.model_id, **self.config, safety_checker=None, token=config.HF_TOKEN
         )
-        pipe.vae.enable_slicing()
-        pipe.vae.enable_tiling()
-        self.pipe = pipe.to("cuda:1")
+        pipeline.vae.enable_slicing()
+        pipeline.vae.enable_tiling()
+        self.pipeline = pipeline.to("cuda:1")
         torch.cuda.empty_cache()
 
     def _load_xl_pipeline(self):
@@ -212,41 +212,41 @@ class DiffusionModel(Model_Buffer):
         else:
             scheduler = "euler"
         if self.type == "prompt2img":
-            pipe = StableDiffusionXLPipeline.from_pretrained(
+            pipeline = StableDiffusionXLPipeline.from_pretrained(
                 self.model_id, **self.config, token=config.HF_TOKEN
             )
         else:
-            pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+            pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
                 self.model_id, **self.config, token=config.HF_TOKEN
             )
 
-        pipe.scheduler = self.schedulers[scheduler].from_config(pipe.scheduler.config)
-        pipe.unet.added_cond_kwargs = {"text_embeds": []}
+        pipeline.scheduler = self.schedulers[scheduler].from_config(pipeline.scheduler.config)
+        pipeline.unet.added_cond_kwargs = {"text_embeds": []}
         print("loaded model!")
-        self.pipe = pipe.to("cuda")
+        self.pipeline = pipeline.to("cuda")
         if (
             self.loaded_lora is not None
             and self.model_id == self.implemeted_loras[self.loaded_lora]["base_model"]
         ):
-            self.pipe.load_lora_weights(
+            self.pipeline.load_lora_weights(
                 os.path.join("..", "loras", self.loaded_lora, "lora.safetensors")
             )
         torch.cuda.empty_cache()
 
     def _load_long_pipeline(self):
         self.loaded_pipeline = "long"
-        pipe = DiffusionPipeline.from_pretrained(
+        pipeline = DiffusionPipeline.from_pretrained(
             self.model_id,
             **self.config,
             custom_pipeline="lpw_stable_diffusion",
             safety_checker=None,
         )
-        self.pipe = pipe.to("cuda")
+        self.pipeline = pipeline.to("cuda")
         if (
             self.loaded_lora is not None
             and self.model_id == self.implemeted_loras[self.loaded_lora]["base_model"]
         ):
-            self.pipe.load_lora_weights(
+            self.pipeline.load_lora_weights(
                 os.path.join("..", "loras", self.loaded_lora, "lora.safetensors")
             )
         torch.cuda.empty_cache()
@@ -259,11 +259,11 @@ class DiffusionModel(Model_Buffer):
             scheduler = "euler"
         self.loaded_pipeline = "base"
         if self.type == "prompt2img":
-            pipe = StableDiffusionPipeline.from_pretrained(self.model_id, **self.config)
+            pipeline = StableDiffusionPipeline.from_pretrained(self.model_id, **self.config)
         else:
-            pipe = StableDiffusionImg2ImgPipeline.from_pretrained(self.model_id, **self.config)
-        pipe.scheduler = self.schedulers[scheduler].from_config(pipe.scheduler.config)
-        self.pipe = pipe.to("cuda")
+            pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(self.model_id, **self.config)
+        pipeline.scheduler = self.schedulers[scheduler].from_config(pipeline.scheduler.config)
+        self.pipeline = pipeline.to("cuda")
         torch.cuda.empty_cache()
 
     def set_model(self, config=None):
@@ -295,20 +295,20 @@ class DiffusionModel(Model_Buffer):
                 self._load_flux_pipeline()
             else:
                 self._load_long_pipeline()
-            self.pipe.safety_checker = None
-            self.pipe.requires_safety_checker = False
+            self.pipeline.safety_checker = None
+            self.pipeline.requires_safety_checker = False
 
     def _prompt_to_embedding(self, prompt):
-        tokens = self.pipe.tokenizer(prompt, return_tensors="pt")
-        prompt_embeds = self.pipe.text_encoder(
-            tokens["input_ids"][:, 0 : self.pipe.tokenizer.model_max_length].to("cuda"),
-            attention_mask=tokens["attention_mask"][:, 0 : self.pipe.tokenizer.model_max_length].to(
+        tokens = self.pipeline.tokenizer(prompt, return_tensors="pt")
+        prompt_embeds = self.pipeline.text_encoder(
+            tokens["input_ids"][:, 0 : self.pipeline.tokenizer.model_max_length].to("cuda"),
+            attention_mask=tokens["attention_mask"][:, 0 : self.pipeline.tokenizer.model_max_length].to(
                 "cuda"
             ),
         )
         prompt_embeds = prompt_embeds[0]
-        embedded_text = self.pipe.tokenizer.batch_decode(
-            tokens["input_ids"][:, 1 : (self.pipe.tokenizer.model_max_length - 1)]
+        embedded_text = self.pipeline.tokenizer.batch_decode(
+            tokens["input_ids"][:, 1 : (self.pipeline.tokenizer.model_max_length - 1)]
         )
         return prompt_embeds.tolist(), embedded_text
 
@@ -316,11 +316,11 @@ class DiffusionModel(Model_Buffer):
         if self.loaded_pipeline in ["long"]:
             if config["type"] == "img2img":
                 args["image"] = args["image"][0]
-                images = self.pipe.img2img(**args, max_embeddings_multiples=20).images
+                images = self.pipeline.img2img(**args, max_embeddings_multiples=20).images
             elif config["type"] == "prompt2img":
-                images = self.pipe.text2img(**args, max_embeddings_multiples=20).images
+                images = self.pipeline.text2img(**args, max_embeddings_multiples=20).images
         else:
-            images = self.pipe(**args).images
+            images = self.pipeline(**args).images
         return images
 
     def gen_image(self, prompt, config):
