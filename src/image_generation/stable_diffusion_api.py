@@ -267,7 +267,8 @@ class DiffusionModel(Model_Buffer):
         torch.cuda.empty_cache()
 
     def set_model(self, config=None):
-        reset = config["type"] != self.type
+        # Force reset if pipeline not loaded yet (first initialization)
+        reset = config["type"] != self.type or self.pipeline is None
         if config is not None:
             if "model_id" in config and self.model_id != config["model_id"]:
                 self.model_id = config["model_id"]
