@@ -446,7 +446,10 @@ async def get_image(
     prompt = item.prompt
     del cfg["prompt"]
     if image is not None:
-        cfg["image"] = await image.read()
+        try:
+            cfg["image"] = await image.read()
+        except AttributeError:
+            pass
     image = image_grid(model.gen_image(prompt, cfg))
     image = get_bytes_value(image)
     return Response(content=image, media_type="image/png")
