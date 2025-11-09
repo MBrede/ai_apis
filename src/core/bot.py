@@ -688,7 +688,7 @@ async def audio_transcription(update: Update, context: CallbackContext, sound) -
             ) as tmp:
                 tmp.write(audio_bytes)
                 files = {"file": (tmp.name, open(tmp.name, "rb"), sound.mime_type)}
-                url = f"{WHISPER_ENDPOINT}/transcribe?model_to_use=turbo"
+                url = f"{WHISPER_ENDPOINT}/transcribe?model_to_use=turbo&api_key={config.API_KEY}"
                 response = requests.post(url, files=files)
 
                 transcription = json.loads(response.text)["answer"]
