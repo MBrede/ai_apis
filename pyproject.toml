@@ -61,6 +61,7 @@ stable-diffusion-only = [
     "tqdm>=4.67.1",
     "python-multipart>=0.0.20",
     "protobuf>=6.33.0",
+    "sentencepiece>=0.2.1",
 ]
 
 whisper-only = [
