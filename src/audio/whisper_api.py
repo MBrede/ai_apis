@@ -134,16 +134,12 @@ def diarize_audio(
             mono, num_speakers=num_speakers, min_speakers=min_speakers, max_speakers=max_speakers
         )
 
-        # dump the diarization output to disk using RTTM format
-        with open("audio.rttm", "w") as rttm:
-            diarization.write_rttm(rttm)
-
-    with open("audio.rttm") as f:
-        lines = f.readlines()
+        lines = diarization.serialize()["diarization"]
 
     out = []
     for line in lines:
-        _, _, _, start, duration, _, _, speaker, _, _ = line.split()
+        start, end, speaker = line.values()
+        duration = end - start
         with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
             cmd = f'ffmpeg -ss {start} -i "{file}" -t {duration} -y -ac 1 {tmp.name}'
             subprocess.check_output(cmd, shell=True)
