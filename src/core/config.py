@@ -28,11 +28,11 @@ class APIConfig:
 
     # LLM Endpoints (Legacy - for backward compatibility)
     LLM_MIXTRAL_HOST: str = os.getenv("LLM_MIXTRAL_HOST", "localhost")
-    LLM_MIXTRAL_PORT: int = int(os.getenv("LLM_MIXTRAL_PORT", "8000"))
+    LLM_MIXTRAL_PORT: int = int(os.getenv("LLM_MIXTRAL_PORT", "420420"))
     LLM_MIXTRAL_URL: str = f"http://{LLM_MIXTRAL_HOST}:{LLM_MIXTRAL_PORT}"
 
     LLM_COMMAND_R_HOST: str = os.getenv("LLM_COMMAND_R_HOST", "localhost")
-    LLM_COMMAND_R_PORT: int = int(os.getenv("LLM_COMMAND_R_PORT", "1234"))
+    LLM_COMMAND_R_PORT: int = int(os.getenv("LLM_COMMAND_R_PORT", "420421"))
     LLM_COMMAND_R_URL: str = f"http://{LLM_COMMAND_R_HOST}:{LLM_COMMAND_R_PORT}"
 
     # OLLAMA Endpoint (Primary LLM)
@@ -42,7 +42,7 @@ class APIConfig:
 
     # Stable Diffusion Endpoint
     SD_HOST: str = os.getenv("SD_HOST", "localhost")
-    SD_PORT: int = int(os.getenv("SD_PORT", "8000"))
+    SD_PORT: int = int(os.getenv("SD_PORT", "1234"))
     SD_URL: str = f"http://{SD_HOST}:{SD_PORT}"
 
     # Whisper Endpoint
