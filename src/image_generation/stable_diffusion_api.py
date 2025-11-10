@@ -201,7 +201,7 @@ class DiffusionModel(Model_Buffer):
         )
         pipeline.vae.enable_slicing()
         pipeline.vae.enable_tiling()
-        self.pipeline = pipeline.to("cuda:1")
+        self.pipeline = pipeline.to("cuda")
         torch.cuda.empty_cache()
 
     def _load_xl_pipeline(self):
