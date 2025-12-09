@@ -203,6 +203,12 @@ class DiffusionModel(Model_Buffer):
         pipeline.vae.enable_tiling()
         self.pipeline = pipeline.to("cuda")
         torch.cuda.empty_cache()
+        
+    def _load_sd3_pipeline(self):
+        self.loaded_pipeline = "sd3"
+        pipe = StableDiffusion3Pipeline.from_pretrained(self.model_id, **self.config, safety_checker=None, token=config.HF_TOKEN)
+        self.pipeline = pipe.to("cuda")
+        torch.cuda.empty_cache()
 
     def _load_xl_pipeline(self):
         self.loaded_pipeline = "xl"
@@ -294,6 +300,8 @@ class DiffusionModel(Model_Buffer):
                 self._load_xl_pipeline()
             elif "FLUX" in self.model_id:
                 self._load_flux_pipeline()
+            elif "stable-diffusion-3" in self.model_id:
+                self._load_sd3_pipeline()
             else:
                 self._load_long_pipeline()
             self.pipeline.safety_checker = None
