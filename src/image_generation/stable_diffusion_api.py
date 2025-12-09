@@ -25,6 +25,7 @@ from diffusers import (
     StableDiffusionPipeline,
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
+    StableDiffusion3Pipeline
 )
 from fastapi import APIRouter, Depends, FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
