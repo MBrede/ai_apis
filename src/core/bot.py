@@ -269,12 +269,17 @@ async def message_handler(update: Update, context: CallbackContext) -> None:
                 await handle_photo_prompt(photo, prompt, update, context, current_settings)
             else:
                 await img2prompt_handler(update, context, photo)
-        elif update.message.audio:
-            sound = update.message.audio
-            await audio_transcription(update, context, sound)
-        elif update.message.voice:
-            sound = update.message.voice
-            await audio_transcription(update, context, sound)
+        elif update.message.audio or update.message.voice or update.message.video or update.message.document:
+            sound = update.message.audio or update.message.voice or update.message.video or update.message.document
+            caption = update.message.caption or ""
+            if caption.startswith("/diarize"):
+                context.args = caption.split()[1:]
+                await diarize_command(update, context)
+            else:
+                if update.message.audio or update.message.voice:
+                    await audio_transcription(update, context, sound)
+                else:
+                    await update.message.reply_text("Send audio or voice messages for transcription.")
         else:
             if USERS[user_id]["mode"] == "llm":
                 await llm_handler(update, context)
@@ -767,21 +772,19 @@ async def diarize_command(update: Update, context: CallbackContext) -> None:
         )
         return
 
-    # Resolve the audio source: current message or the message being replied to
-    source_message = update.message
-    if update.message.reply_to_message is not None:
-        source_message = update.message.reply_to_message
+    # Resolve the audio source: current message (caption use), then reply_to
+    for msg in (update.message, update.message.reply_to_message):
+        if msg is None:
+            continue
+        sound = msg.audio or msg.voice or msg.video or msg.video_note or msg.document
+        if sound is not None:
+            break
+    else:
+        sound = None
 
-    sound = (
-        source_message.audio
-        or source_message.voice
-        or source_message.video
-        or source_message.video_note
-        or source_message.document
-    )
     if sound is None:
         await update.message.reply_text(
-            "No audio or video found. Reply to an audio, voice, or video message with /diarize <speakers>."
+            "Send an audio, voice, or video file with the caption /diarize <num_speakers>."
         )
         return
 
@@ -932,7 +935,7 @@ def main() -> None:
     # Registering a message handler for handling generic text input
     app.add_handler(
         MessageHandler(
-            filters.AUDIO | filters.VOICE | filters.PHOTO | filters.TEXT & ~filters.COMMAND,
+            filters.AUDIO | filters.VOICE | filters.VIDEO | filters.Document.ALL | filters.PHOTO | filters.TEXT & ~filters.COMMAND,
             message_handler,
         )
     )
