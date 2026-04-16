@@ -770,17 +770,25 @@ async def diarize_command(update: Update, context: CallbackContext) -> None:
     if update.message.reply_to_message is not None:
         source_message = update.message.reply_to_message
 
-    sound = source_message.audio or source_message.voice
+    sound = (
+        source_message.audio
+        or source_message.voice
+        or source_message.video
+        or source_message.video_note
+        or source_message.document
+    )
     if sound is None:
         await update.message.reply_text(
-            "No audio found. Reply to an audio/voice message with /diarize <speakers>."
+            "No audio or video found. Reply to an audio, voice, or video message with /diarize <speakers>."
         )
         return
 
-    await update.message.reply_text(f"Diarizing {sound.duration}s long audio, please wait...")
+    duration = getattr(sound, "duration", None)
+    duration_str = f"{duration}s " if duration is not None else ""
+    await update.message.reply_text(f"Diarizing {duration_str}file, please wait...")
 
-    mime = getattr(sound, "mime_type", "audio/ogg")
-    suffix = mime.split("/")[1] if "/" in mime else "ogg"
+    mime = getattr(sound, "mime_type", "audio/ogg") or "audio/ogg"
+    suffix = mime.split("/")[1] if "/" in mime else "ogg"  # e.g. video/mp4 → mp4, audio/ogg → ogg
 
     file = await context.bot.get_file(sound.file_id)
     audio_bytes = await file.download_as_bytearray()
