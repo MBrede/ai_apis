@@ -245,7 +245,9 @@ async def help_command(update: Update, context: CallbackContext) -> None:
             "/llm - switch between sd and llm-mode\n"
             "/assist <text> - Get help creating prompts with the LLM\n"
             "/assist_create <text> - Get help creating prompts and let SD directly turn it into an image\n"
-            "/img2prompt <image> - Describe an image."
+            "/img2prompt <image> - Describe an image.\n"
+            "/diarize <num_speakers> - Diarize an audio file (reply to audio message with speaker count)\n"
+            "/diarize <min> <max> - Diarize with estimated speaker count range\n"
             "Just write Text - Will be interpreted as a prompt for image generation"
         )
         await update.message.reply_text(help_text)
@@ -675,6 +677,155 @@ async def img2prompt_handler(update: Update, context: CallbackContext, photo) ->
             await update.message.reply_text("Failed to generate text from image.")
 
 
+def _seconds_to_srt_timestamp(seconds: float) -> str:
+    """Convert seconds to SRT timestamp format HH:MM:SS,mmm."""
+    total_ms = int(seconds * 1000)
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    h = total_s // 3600
+    m = (total_s % 3600) // 60
+    s = total_s % 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _format_as_srt(segments: list[dict]) -> str:
+    """Format diarization segments as an SRT subtitle file.
+
+    Args:
+        segments: List of dicts with SPEAKER, START, DURATION, TRANSCRIPTION keys.
+
+    Returns:
+        SRT-formatted string.
+    """
+    blocks = []
+    for i, seg in enumerate(segments, start=1):
+        start_ts = _seconds_to_srt_timestamp(seg["START"])
+        end_ts = _seconds_to_srt_timestamp(seg["START"] + seg["DURATION"])
+        speaker = seg["SPEAKER"]
+        text = seg["TRANSCRIPTION"].strip()
+        blocks.append(f"{i}\n{start_ts} --> {end_ts}\n{speaker}: {text}")
+    return "\n\n".join(blocks)
+
+
+def _format_diarization_as_text(segments: list[dict]) -> str:
+    """Format diarization segments into a readable transcript.
+
+    Args:
+        segments: List of dicts with SPEAKER, START, DURATION, TRANSCRIPTION, LANGUAGE keys.
+
+    Returns:
+        Formatted transcript string with timestamps and speaker labels.
+    """
+    lines = []
+    for seg in segments:
+        start = seg["START"]
+        end = seg["START"] + seg["DURATION"]
+        start_str = str(datetime.timedelta(seconds=int(start)))
+        end_str = str(datetime.timedelta(seconds=int(end)))
+        speaker = seg["SPEAKER"]
+        text = seg["TRANSCRIPTION"].strip()
+        lines.append(f"[{start_str} - {end_str}] {speaker}: {text}")
+    return "\n".join(lines)
+
+
+async def diarize_command(update: Update, context: CallbackContext) -> None:
+    """Diarize an audio file and return a speaker-labelled transcript as a text file.
+
+    Usage (send as a reply to an audio/voice message, or attach audio directly):
+        /diarize <num_speakers>           - exact speaker count
+        /diarize <min_speakers> <max_speakers> - speaker count range
+    """
+    privileges = await check_privileges(update)
+    if not privileges:
+        return
+
+    # Parse speaker count arguments
+    args = context.args
+    num_speakers: int | None = None
+    min_speakers: int | None = None
+    max_speakers: int | None = None
+
+    if len(args) == 1:
+        try:
+            num_speakers = int(args[0])
+        except ValueError:
+            await update.message.reply_text("Usage: /diarize <num_speakers> or /diarize <min> <max>")
+            return
+    elif len(args) == 2:
+        try:
+            min_speakers = int(args[0])
+            max_speakers = int(args[1])
+        except ValueError:
+            await update.message.reply_text("Usage: /diarize <num_speakers> or /diarize <min> <max>")
+            return
+    else:
+        await update.message.reply_text(
+            "Please specify speakers: /diarize <num_speakers> or /diarize <min> <max>\n"
+            "Send this command as a reply to an audio/voice message."
+        )
+        return
+
+    # Resolve the audio source: current message or the message being replied to
+    source_message = update.message
+    if update.message.reply_to_message is not None:
+        source_message = update.message.reply_to_message
+
+    sound = source_message.audio or source_message.voice
+    if sound is None:
+        await update.message.reply_text(
+            "No audio found. Reply to an audio/voice message with /diarize <speakers>."
+        )
+        return
+
+    await update.message.reply_text(f"Diarizing {sound.duration}s long audio, please wait...")
+
+    mime = getattr(sound, "mime_type", "audio/ogg")
+    suffix = mime.split("/")[1] if "/" in mime else "ogg"
+
+    file = await context.bot.get_file(sound.file_id)
+    audio_bytes = await file.download_as_bytearray()
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        params: dict = {"model_to_use": "turbo", "api_key": config.API_KEY}
+        if num_speakers is not None:
+            params["num_speakers"] = num_speakers
+        else:
+            params["min_speakers"] = min_speakers
+            params["max_speakers"] = max_speakers
+
+        url = f"{WHISPER_ENDPOINT}/transcribe_and_diarize/"
+        with open(tmp_path, "rb") as audio_file:
+            response = requests.post(url, params=params, files={"file": (tmp_path, audio_file, mime)})
+
+        if response.status_code != 200:
+            logger.error("Diarization API error %s: %s", response.status_code, response.text)
+            await update.message.reply_text(f"Diarization failed: {response.json().get('detail', response.text)}")
+            return
+
+        segments = response.json()["answer"]
+        caption = f"Diarization complete — {len(segments)} segments found."
+
+        await update.message.reply_document(
+            document=BytesIO(_format_diarization_as_text(segments).encode("utf-8")),
+            filename="diarization.txt",
+            caption=caption,
+        )
+        await update.message.reply_document(
+            document=BytesIO(_format_as_srt(segments).encode("utf-8")),
+            filename="diarization.srt",
+        )
+    except Exception as exc:
+        logger.exception("Diarization command failed")
+        await update.message.reply_text(f"An error occurred during diarization: {exc}")
+    finally:
+        import os
+        os.remove(tmp_path)
+
+
 async def audio_transcription(update: Update, context: CallbackContext, sound) -> None:
     """Transcribe audio using Whisper API."""
     privileges = await check_privileges(update)
@@ -761,6 +912,7 @@ def main() -> None:
     app.add_handler(CommandHandler("llm", change_mode))
     app.add_handler(CommandHandler("assist", assist_handler))
     app.add_handler(CommandHandler("assist_create", assist_creator))
+    app.add_handler(CommandHandler("diarize", diarize_command))
 
     # Registering a message handler for handling generic text input
     app.add_handler(
