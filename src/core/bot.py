@@ -6,10 +6,12 @@ text generation with OLLAMA, and audio transcription.
 Supports MongoDB for persistent user settings storage.
 """
 
+import asyncio
 import datetime
 import json
 import logging
 import tempfile
+from functools import partial
 from io import BytesIO
 
 import requests
@@ -806,8 +808,13 @@ async def diarize_command(update: Update, context: CallbackContext) -> None:
             params["max_speakers"] = max_speakers
 
         url = f"{WHISPER_ENDPOINT}/transcribe_and_diarize/"
-        with open(tmp_path, "rb") as audio_file:
-            response = requests.post(url, params=params, files={"file": (tmp_path, audio_file, mime)})
+
+        def _post() -> requests.Response:
+            with open(tmp_path, "rb") as audio_file:
+                return requests.post(url, params=params, files={"file": (tmp_path, audio_file, mime)})
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _post)
 
         if response.status_code != 200:
             logger.error("Diarization API error %s: %s", response.status_code, response.text)
