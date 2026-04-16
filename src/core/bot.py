@@ -795,6 +795,13 @@ async def diarize_command(update: Update, context: CallbackContext) -> None:
     mime = getattr(sound, "mime_type", "audio/ogg") or "audio/ogg"
     suffix = mime.split("/")[1] if "/" in mime else "ogg"  # e.g. video/mp4 → mp4, audio/ogg → ogg
 
+    file_size = getattr(sound, "file_size", None)
+    if file_size is not None and file_size > 20 * 1024 * 1024:
+        await update.message.reply_text(
+            f"File is too large ({file_size // (1024*1024)} MB). Telegram limits bot downloads to 20 MB."
+        )
+        return
+
     file = await context.bot.get_file(sound.file_id)
     audio_bytes = await file.download_as_bytearray()
 
