@@ -42,6 +42,7 @@ api-core = [
     "uvicorn[standard]>=0.34.0",
     "gunicorn>=23.0.0",
     "pydantic>=2.10.5",
+    "PyJWT[crypto]>=2.9.0",   # JWT validation for optional Keycloak auth
 ]
 
 # ML Base (common ML packages shared across all ML APIs)
@@ -98,6 +99,14 @@ llm-training = [
     "unsloth>=2025.11.1",
     "trl>=0.13.0",
     "datasets>=3.2.0",
+]
+
+# Nextcloud sync script
+nextcloud = [
+    "aiohttp>=3.9.0",
+    "webdavclient3>=3.14.6",
+    "tqdm>=4.67.1",
+    "PyJWT[crypto]>=2.9.0",   # Keycloak Client Credentials token fetching
 ]
 
 # Development tools

@@ -1,12 +1,16 @@
 """
 Authentication utilities for API security.
 
-Provides API key-based authentication for FastAPI endpoints.
-Supports both environment variable and MongoDB-based authentication.
-Supports multiple API keys (comma-separated in environment variables).
+Priority when Keycloak is configured (KEYCLOAK_URL set):
+  1. Authorization: Bearer <jwt>  →  validated against Keycloak JWKS
+  2. X-API-Key header / api_key query param  →  existing key-based logic
+
+When KEYCLOAK_URL is not set, only API key authentication is used
+(no behaviour change from before).
 """
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from src.core.config import config
@@ -17,12 +21,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Lazy import of FastAPI dependencies
+# ---------------------------------------------------------------------------
+# Lazy FastAPI helpers
+# ---------------------------------------------------------------------------
+
 _api_key_header = None
 
 
 def _get_api_key_header():
-    """Lazy load APIKeyHeader to avoid requiring FastAPI for non-API uses."""
+    """Lazy-load APIKeyHeader to avoid importing FastAPI in non-API contexts."""
     global _api_key_header
     if _api_key_header is None:
         try:
@@ -38,115 +45,269 @@ def _get_api_key_header():
 
 
 def get_api_key_dependency():
-    """
-    Get the FastAPI Security dependency for API key verification.
-
-    Returns:
-        Security dependency that extracts API key from X-API-Key header
-
-    Usage in FastAPI:
-        from src.core.auth import get_api_key_dependency
-        from fastapi import Depends
-
-        @app.get("/endpoint")
-        async def endpoint(api_key: str = Depends(get_api_key_dependency())):
-            ...
-    """
+    """Return the FastAPI Security dependency for API key extraction."""
     from fastapi import Security
 
     return Security(_get_api_key_header())
 
 
-# For backwards compatibility - returns the actual APIKeyHeader instance
 def get_api_key_header():
-    """Get the API key header scheme (lazy loaded)."""
+    """Return the APIKeyHeader instance (lazy loaded)."""
     return _get_api_key_header()
 
 
-# Module-level __getattr__ for lazy loading api_key_header
-def __getattr__(name):
-    """Lazy load module-level attributes."""
+def __getattr__(name: str):
     if name == "api_key_header":
         return get_api_key_header()
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
-def _parse_api_keys(key_string: str | None) -> set[str]:
-    """
-    Parse comma-separated API keys from environment variable.
+# ---------------------------------------------------------------------------
+# Keycloak / JWT helpers
+# ---------------------------------------------------------------------------
+
+# PyJWKClient caches the JWKS internally; one instance per realm is enough.
+_jwks_client = None
+_jwks_client_built_at: float = 0
+_JWKS_CLIENT_TTL = 3600  # rebuild client (re-fetch JWKS) at most once per hour
+
+
+def _get_jwks_client():
+    """Return a (cached) PyJWKClient for the configured Keycloak realm."""
+    global _jwks_client, _jwks_client_built_at
+
+    if not config.KEYCLOAK_URL:
+        return None
+
+    now = time.monotonic()
+    if _jwks_client is None or now - _jwks_client_built_at > _JWKS_CLIENT_TTL:
+        try:
+            from jwt import PyJWKClient
+
+            jwks_url = (
+                f"{config.KEYCLOAK_URL.rstrip('/')}/realms/{config.KEYCLOAK_REALM}"
+                "/protocol/openid-connect/certs"
+            )
+            _jwks_client = PyJWKClient(
+                jwks_url,
+                # Honour the KEYCLOAK_VERIFY_SSL flag for self-signed certs
+                ssl_context=_build_ssl_context(),
+            )
+            _jwks_client_built_at = now
+            logger.debug("Built PyJWKClient for %s", jwks_url)
+        except ImportError:
+            raise ImportError(
+                "PyJWT[crypto] is required for Keycloak auth. "
+                "Install it with: pip install 'PyJWT[crypto]'"
+            )
+
+    return _jwks_client
+
+
+def _build_ssl_context():
+    """Return an ssl.SSLContext respecting KEYCLOAK_VERIFY_SSL."""
+    import ssl
+
+    if config.KEYCLOAK_VERIFY_SSL:
+        return ssl.create_default_context()
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _validate_jwt(token: str) -> dict:
+    """Validate a JWT Bearer token against Keycloak JWKS.
 
     Args:
-        key_string: Comma-separated list of API keys or single key
+        token: Raw JWT string (without 'Bearer ' prefix).
 
     Returns:
-        Set of API keys (empty if None)
+        Decoded JWT payload dict.
+
+    Raises:
+        jwt.exceptions.PyJWTError: On any validation failure.
     """
+    import jwt as pyjwt
+
+    client = _get_jwks_client()
+    signing_key = client.get_signing_key_from_jwt(token)
+
+    decode_opts: dict = {"verify_exp": True}
+    audience = config.KEYCLOAK_CLIENT_ID  # None → skip audience check
+
+    payload = pyjwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["RS256"],
+        audience=audience,
+        options=decode_opts,
+    )
+    return payload
+
+
+def _roles_from_payload(payload: dict) -> set[str]:
+    """Extract realm-level roles from a decoded JWT payload."""
+    return set(payload.get("realm_access", {}).get("roles", []))
+
+
+# ---------------------------------------------------------------------------
+# Token fetching for outbound service calls (Client Credentials)
+# ---------------------------------------------------------------------------
+
+_cc_token: str | None = None
+_cc_token_expires_at: float = 0
+
+
+def get_service_token() -> str | None:
+    """Obtain a Bearer token for service-to-service calls via Client Credentials.
+
+    Returns None if Keycloak is not configured (callers fall back to API key).
+    Token is cached until 30 seconds before expiry.
+    """
+    global _cc_token, _cc_token_expires_at
+
+    if not config.KEYCLOAK_URL or not config.KEYCLOAK_CLIENT_ID or not config.KEYCLOAK_CLIENT_SECRET:
+        return None
+
+    now = time.monotonic()
+    if _cc_token and now < _cc_token_expires_at:
+        return _cc_token
+
+    import requests as _req
+
+    token_url = (
+        f"{config.KEYCLOAK_URL.rstrip('/')}/realms/{config.KEYCLOAK_REALM}"
+        "/protocol/openid-connect/token"
+    )
+    resp = _req.post(
+        token_url,
+        data={
+            "grant_type": "client_credentials",
+            "client_id": config.KEYCLOAK_CLIENT_ID,
+            "client_secret": config.KEYCLOAK_CLIENT_SECRET,
+        },
+        verify=config.KEYCLOAK_VERIFY_SSL,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    _cc_token = data["access_token"]
+    _cc_token_expires_at = now + data.get("expires_in", 300) - 30  # 30-s buffer
+    logger.debug("Obtained new Keycloak service token (expires in %ds)", data.get("expires_in", 300))
+    return _cc_token
+
+
+def build_auth_headers(api_key: str | None = None) -> dict[str, str]:
+    """Return the correct auth headers for outbound API calls.
+
+    Prefers Keycloak Bearer token when configured, otherwise returns the
+    legacy X-API-Key header so callers don't need to know which is active.
+
+    Args:
+        api_key: Fallback API key (used when Keycloak is not configured).
+
+    Returns:
+        Dict with either Authorization or X-API-Key header.
+    """
+    token = get_service_token()
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    key = api_key or config.API_KEY or ""
+    return {"X-API-Key": key}
+
+
+# ---------------------------------------------------------------------------
+# MongoDB key verification
+# ---------------------------------------------------------------------------
+
+
+def _parse_api_keys(key_string: str | None) -> set[str]:
+    """Parse comma-separated API keys from an environment variable string."""
     if not key_string:
         return set()
     return {key.strip() for key in key_string.split(",") if key.strip()}
 
 
 async def verify_api_key_mongodb(api_key: str) -> dict | None:
-    """
-    Verify API key against MongoDB.
+    """Verify an API key against MongoDB.
 
     Args:
-        api_key: API key to verify
+        api_key: Key to check.
 
     Returns:
-        dict: API key document if valid, None otherwise
+        Key document if valid and active, None otherwise.
     """
     db = get_mongo_db()
     if db is None:
         return None
-
     try:
-        api_keys_collection = db.api_keys
-        key_doc = api_keys_collection.find_one({"key": api_key, "active": True})
-        return key_doc
-    except Exception as e:
-        logger.error(f"MongoDB query error: {e}")
+        return db.api_keys.find_one({"key": api_key, "active": True})
+    except Exception as exc:
+        logger.error("MongoDB query error: %s", exc)
         return None
 
 
-async def _verify_api_key_impl(api_key: str | None) -> str:
-    """
-    Internal implementation of API key verification.
+# ---------------------------------------------------------------------------
+# Core verification logic
+# ---------------------------------------------------------------------------
+
+
+async def _verify_jwt_or_raise(authorization: str) -> str:
+    """Validate a Bearer token, raise HTTPException on failure."""
+    from fastapi import HTTPException, status
+
+    token = authorization[len("Bearer "):]
+    try:
+        payload = _validate_jwt(token)
+        sub = payload.get("sub", "unknown")
+        logger.info("JWT verified via Keycloak, subject: %s", sub)
+        return f"keycloak:{sub}"
+    except Exception as exc:
+        logger.warning("JWT validation failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+async def _verify_api_key_impl(api_key: str | None, authorization: str | None = None) -> str:
+    """Core auth logic — used by both verify_api_key and verify_admin_key.
 
     Args:
-        api_key: API key to verify
+        api_key: Key from X-API-Key header or query param.
+        authorization: Raw Authorization header value.
 
     Returns:
-        str: The validated API key
-
-    Raises:
-        HTTPException: If API key is invalid or missing (when auth required)
+        Identifier string for the authenticated principal.
     """
     from fastapi import HTTPException, status
 
-    # If authentication is disabled, allow all requests
     if not config.REQUIRE_AUTH:
         return "auth_disabled"
 
-    # Check if API key is provided
+    # --- Keycloak JWT path ---
+    if config.KEYCLOAK_URL and authorization and authorization.startswith("Bearer "):
+        return await _verify_jwt_or_raise(authorization)
+
+    # --- API key path ---
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API key. Provide X-API-Key header.",
+            detail="Missing credentials. Provide X-API-Key header or Authorization: Bearer token.",
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
-    # Try MongoDB authentication first
     if config.USE_MONGODB:
         key_doc = await verify_api_key_mongodb(api_key)
         if key_doc:
-            logger.info(f"API key verified via MongoDB: {key_doc.get('name', 'Unknown')}")
+            logger.info("API key verified via MongoDB: %s", key_doc.get("name", "Unknown"))
             return api_key
 
-    # Fallback to environment variable authentication (supports multiple keys)
     valid_keys = _parse_api_keys(config.API_KEY)
     if valid_keys and api_key in valid_keys:
-        logger.info("API key verified via environment variables")
+        logger.info("API key verified via environment variable")
         return api_key
 
     raise HTTPException(
@@ -155,131 +316,99 @@ async def _verify_api_key_impl(api_key: str | None) -> str:
     )
 
 
-async def verify_api_key(api_key: str | None = None) -> str:
-    """
-    FastAPI dependency for API key verification.
-
-    This function can be used with Depends() in FastAPI endpoints.
-    When used without arguments, it will automatically extract the key from headers.
-
-    Usage:
-        from fastapi import Depends
-        from src.core.auth import verify_api_key
-
-        @app.get("/endpoint")
-        async def endpoint(api_key: str = Depends(verify_api_key)):
-            ...
-
-    Args:
-        api_key: API key from X-API-Key header (auto-injected by FastAPI)
-
-    Returns:
-        str: The validated API key
-
-    Raises:
-        HTTPException: If API key is invalid or missing
-    """
-    # If called from FastAPI with Depends(), api_key should be provided
-    # If called directly for testing, we can handle None
-    if api_key is None:
-        try:
-            from fastapi import Security  # noqa: F401
-
-            # This branch is for when used as a dependency
-            return await _verify_api_key_impl(api_key)
-        except ImportError:
-            # FastAPI not available
-            return await _verify_api_key_impl(api_key)
-    return await _verify_api_key_impl(api_key)
-
-
-async def _verify_admin_key_impl(api_key: str | None) -> str:
-    """
-    Internal implementation of admin API key verification.
-
-    Args:
-        api_key: API key to verify
-
-    Returns:
-        str: The validated admin API key
-
-    Raises:
-        HTTPException: If admin API key is invalid or missing
-    """
+async def _verify_admin_key_impl(api_key: str | None, authorization: str | None = None) -> str:
+    """Admin-level auth — requires admin role (Keycloak) or admin key (API key)."""
     from fastapi import HTTPException, status
 
-    # If authentication is disabled, allow all requests
     if not config.REQUIRE_AUTH:
         return "auth_disabled"
 
-    # Check if API key is provided
+    # --- Keycloak JWT path ---
+    if config.KEYCLOAK_URL and authorization and authorization.startswith("Bearer "):
+        token = authorization[len("Bearer "):]
+        try:
+            payload = _validate_jwt(token)
+        except Exception as exc:
+            logger.warning("JWT validation failed: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid bearer token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if config.KEYCLOAK_ADMIN_ROLE in _roles_from_payload(payload):
+            logger.info("Admin role verified via Keycloak JWT")
+            return f"keycloak:{payload.get('sub')}"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Keycloak role '{config.KEYCLOAK_ADMIN_ROLE}' required for admin access",
+        )
+
+    # --- Admin API key path ---
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing admin API key. Provide X-API-Key header.",
+            detail="Missing admin credentials.",
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
-    # Try MongoDB authentication first
     if config.USE_MONGODB:
         key_doc = await verify_api_key_mongodb(api_key)
         if key_doc and key_doc.get("is_admin", False):
-            logger.info(f"Admin key verified via MongoDB: {key_doc.get('name', 'Unknown')}")
+            logger.info("Admin key verified via MongoDB: %s", key_doc.get("name"))
             return api_key
 
-    # Fallback to environment variable authentication (supports multiple keys)
     valid_admin_keys = _parse_api_keys(config.ADMIN_API_KEY)
     if not valid_admin_keys:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Admin API key not configured on server",
         )
-
     if api_key in valid_admin_keys:
-        logger.info("Admin key verified via environment variables")
+        logger.info("Admin key verified via environment variable")
         return api_key
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Invalid admin API key. Admin access required.",
+        detail="Invalid admin API key",
     )
 
 
-async def verify_admin_key(api_key: str | None = None) -> str:
-    """
-    FastAPI dependency for admin API key verification.
+# ---------------------------------------------------------------------------
+# FastAPI dependencies
+# ---------------------------------------------------------------------------
 
-    This function can be used with Depends() in FastAPI endpoints.
 
-    Usage:
+async def verify_api_key(request: "Request", api_key: str | None = None) -> str:  # type: ignore[name-defined]
+    """FastAPI dependency — verifies JWT Bearer token or API key.
+
+    Usage::
+
         from fastapi import Depends
-        from src.core.auth import verify_admin_key
+        from src.core.auth import verify_api_key
 
-        @app.post("/admin/endpoint")
-        async def admin_endpoint(api_key: str = Depends(verify_admin_key)):
+        @app.get("/endpoint")
+        async def endpoint(api_key: str = Depends(verify_api_key)):
             ...
-
-    Args:
-        api_key: Admin API key from X-API-Key header (auto-injected by FastAPI)
-
-    Returns:
-        str: The validated admin API key
-
-    Raises:
-        HTTPException: If admin API key is invalid or missing
     """
-    return await _verify_admin_key_impl(api_key)
+    from fastapi import Request as _Request  # noqa: F401 (used via type hint above)
+
+    authorization = request.headers.get("Authorization")
+    return await _verify_api_key_impl(api_key, authorization=authorization)
+
+
+async def verify_admin_key(request: "Request", api_key: str | None = None) -> str:  # type: ignore[name-defined]
+    """FastAPI dependency — verifies admin JWT role or admin API key."""
+    authorization = request.headers.get("Authorization")
+    return await _verify_admin_key_impl(api_key, authorization=authorization)
 
 
 def get_auth_status() -> dict:
-    """
-    Get current authentication status.
-
-    Returns:
-        dict: Authentication configuration status
-    """
+    """Return current authentication configuration status."""
     return {
         "authentication_enabled": config.REQUIRE_AUTH,
         "api_key_set": bool(config.API_KEY),
         "admin_key_set": bool(config.ADMIN_API_KEY),
+        "keycloak_enabled": bool(config.KEYCLOAK_URL),
+        "keycloak_realm": config.KEYCLOAK_REALM if config.KEYCLOAK_URL else None,
+        "keycloak_ssl_verify": config.KEYCLOAK_VERIFY_SSL,
     }

@@ -1,0 +1,57 @@
+---
+# PVC for the HuggingFace / diffusers model cache
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-sd-cache
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.stableDiffusion.cacheStorage | quote }}
+---
+# PVC for downloaded model checkpoints (/app/models)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-sd-models
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.stableDiffusion.modelsStorage | quote }}
+---
+# PVC for LoRA adapter weights (/app/loras)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-sd-loras
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.stableDiffusion.lorasStorage | quote }}

@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-stable-diffusion
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  # Only one replica is supported because all three PVCs are ReadWriteOnce
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai-apis.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: stable-diffusion
+  template:
+    metadata:
+      labels:
+        {{- include "ai-apis.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: stable-diffusion
+    spec:
+      nodeSelector:
+        {{- include "ai-apis.gpuNodeSelector" . | nindent 8 }}
+      containers:
+        - name: stable-diffusion
+          image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.stableDiffusion.image) }}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: {{ .Values.stableDiffusion.port }}
+              protocol: TCP
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: apiKey
+            - name: ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: adminApiKey
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: sdHfToken
+            - name: CIVIT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: civitKey
+            - name: SD_PORT
+              value: {{ .Values.stableDiffusion.port | quote }}
+            - name: USE_MONGODB
+              value: {{ .Values.global.useMongodb | quote }}
+            - name: MONGODB_DB
+              value: {{ .Values.mongodb.database | quote }}
+            # MONGO_USER and MONGO_PASSWORD must be declared before MONGODB_URL
+            # so that the $(VAR) substitution resolves correctly in the kubelet.
+            - name: MONGO_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: mongoRootUser
+            - name: MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: mongoRootPassword
+            - name: MONGODB_URL
+              value: {{ include "ai-apis.mongodbUrl" . | quote }}
+            {{- include "ai-apis.keycloakEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: sd-cache
+              mountPath: /root/.cache
+            - name: sd-models
+              mountPath: /app/models
+            - name: sd-loras
+              mountPath: /app/loras
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            # Stable Diffusion can take a long time to load models on startup
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 15
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 600
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "2"
+              memory: 12Gi
+            limits:
+              nvidia.com/gpu: 1
+      volumes:
+        - name: sd-cache
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-sd-cache
+        - name: sd-models
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-sd-models
+        - name: sd-loras
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-sd-loras

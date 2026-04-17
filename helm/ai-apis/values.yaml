@@ -1,0 +1,188 @@
+# ============================================================
+# Global settings shared across all services
+# ============================================================
+global:
+  # Docker Hub registry base URL
+  imageRegistry: docker.io
+
+  # Docker Hub username / organisation — REQUIRED before deploying
+  imageRepository: ""
+
+  # Default image tag applied to all service images
+  imageTag: latest
+
+  # Longhorn is used as the default storage class for all PVCs
+  storageClass: longhorn
+
+  # API key required by clients to call the AI service endpoints
+  apiKey: ""
+
+  # Admin API key used for privileged operations
+  adminApiKey: ""
+
+  # Set to true to enable MongoDB-backed persistence for API usage tracking
+  useMongodb: true
+
+  # Full MongoDB connection URL.
+  # When left empty it is automatically constructed from the mongodb values below.
+  # Example override: "mongodb://user:password@my-external-host:27017/"
+  mongodbUrl: ""
+
+# ============================================================
+# MongoDB settings (StatefulSet)
+# ============================================================
+mongodb:
+  # MongoDB root username
+  rootUser: admin
+
+  # MongoDB root password — change before deploying to production
+  rootPassword: changeme
+
+  # Name of the initial database to create
+  database: ai_apis
+
+  # Size of the persistent volume claim for MongoDB data
+  storage: 10Gi
+
+# ============================================================
+# Whisper speech-to-text API
+# ============================================================
+whisper:
+  # Docker image name (without registry/repository prefix)
+  image: ai-apis-whisper
+
+  # Port the FastAPI application listens on inside the container
+  port: 8080
+
+  # Hugging Face API token — needed to download gated models
+  hfToken: ""
+
+  # Size of the PVC mounted at /root/.cache for model caching
+  cacheStorage: 20Gi
+
+  # Default Whisper model to load on startup (e.g. turbo, large-v3)
+  defaultModel: turbo
+
+  ingress:
+    # Hostname for the Whisper Ingress resource
+    host: whisper.example.com
+    # Set to true to enable TLS (requires a cert-manager issuer or manual secret)
+    tls: false
+
+# ============================================================
+# Stable Diffusion image-generation API
+# ============================================================
+stableDiffusion:
+  # Docker image name (without registry/repository prefix)
+  image: ai-apis-stable-diffusion
+
+  # Port the FastAPI application listens on inside the container
+  port: 1234
+
+  # Hugging Face API token — needed to download gated diffusion models
+  hfToken: ""
+
+  # CivitAI API key — needed to download models from civitai.com
+  civitKey: ""
+
+  # Size of the PVC mounted at /root/.cache for HuggingFace / diffusers cache
+  cacheStorage: 20Gi
+
+  # Size of the PVC mounted at /app/models for downloaded checkpoints
+  modelsStorage: 50Gi
+
+  # Size of the PVC mounted at /app/loras for LoRA adapters
+  lorasStorage: 5Gi
+
+  ingress:
+    # Hostname for the Stable Diffusion Ingress resource
+    host: sd.example.com
+    # Set to true to enable TLS
+    tls: false
+
+# ============================================================
+# Text Classification / Sentiment Analysis API
+# ============================================================
+textClassification:
+  # Docker image name (without registry/repository prefix)
+  image: ai-apis-text-classification
+
+  # Port the FastAPI application listens on inside the container
+  port: 8000
+
+  # Size of the PVC mounted at /root/.cache for transformer model caching
+  cacheStorage: 10Gi
+
+# ============================================================
+# Telegram Bot (long-polling, no ingress required)
+# ============================================================
+telegramBot:
+  # Docker image name (without registry/repository prefix)
+  image: ai-apis-bot
+
+  # Telegram Bot API token obtained from @BotFather
+  token: ""
+
+  # Hostname or IP of the Ollama LLM backend
+  ollamaHost: ""
+
+  # Port the Ollama service listens on
+  ollamaPort: 2345
+
+# ============================================================
+# Nextcloud transcription sync (Kubernetes CronJob)
+# ============================================================
+# ============================================================
+# Keycloak / OIDC authentication (optional)
+# Leave keycloak.url empty to use plain API key auth only.
+# ============================================================
+keycloak:
+  # Base URL of your Keycloak server, e.g. https://keycloak.example.com
+  url: ""
+
+  # Realm name
+  realm: master
+
+  # Client ID for audience validation and Client Credentials token fetching
+  clientId: ai-apis
+
+  # Client secret for service-to-service token fetching (bot / nextcloud sync)
+  clientSecret: ""
+
+  # Realm role granting admin access
+  adminRole: ai-apis-admin
+
+  # Set to false if Keycloak uses a self-signed certificate
+  verifySSL: false
+
+# ============================================================
+nextcloudSync:
+  # Docker image name (without registry/repository prefix)
+  image: ai-apis-nextcloud
+
+  # Cron schedule for the sync job (default: every day at 02:00)
+  schedule: "0 2 * * *"
+
+  # Base URL of the Nextcloud instance (e.g. https://nextcloud.example.com)
+  nextcloudUrl: ""
+
+  # Nextcloud username used for WebDAV access
+  nextcloudUser: ""
+
+  # Nextcloud password — stored in the shared Secret
+  nextcloudPassword: ""
+
+  # Remote Nextcloud folder path to scan for audio/video files
+  nextcloudFolder: ""
+
+  # Fixed number of speakers for diarization (leave empty for auto-detection)
+  numSpeakers: ""
+
+  # Minimum number of speakers for diarization (leave empty to disable)
+  minSpeakers: ""
+
+  # Maximum number of speakers for diarization (leave empty to disable)
+  maxSpeakers: ""
+
+  # Timeout in seconds for a single Whisper transcription request
+  whisperTimeout: "3600"

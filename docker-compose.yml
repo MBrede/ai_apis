@@ -163,6 +163,31 @@ services:
       whisper:
         condition: service_healthy
 
+  # Nextcloud transcription sync (runs as cron job inside container)
+  nextcloud_sync:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nextcloud
+    container_name: ai_apis_nextcloud_sync
+    restart: unless-stopped
+    environment:
+      - NEXTCLOUD_URL=${NEXTCLOUD_URL}
+      - NEXTCLOUD_USER=${NEXTCLOUD_USER}
+      - NEXTCLOUD_PASSWORD=${NEXTCLOUD_PASSWORD}
+      - NEXTCLOUD_FOLDER=${NEXTCLOUD_FOLDER}
+      - WHISPER_URL=http://whisper:${WHISPER_PORT:-8080}
+      - WHISPER_API_KEY=${API_KEY:-your-api-key-here}
+      - WHISPER_MODEL=${DEFAULT_WHISPER_MODEL:-turbo}
+      - NUM_SPEAKERS=${NUM_SPEAKERS:-}
+      - MIN_SPEAKERS=${MIN_SPEAKERS:-}
+      - MAX_SPEAKERS=${MAX_SPEAKERS:-}
+      - WHISPER_TIMEOUT=${WHISPER_TIMEOUT:-3600}
+    networks:
+      - ai_apis_network
+    depends_on:
+      whisper:
+        condition: service_healthy
+
 volumes:
   mongodb_data:
     driver: local

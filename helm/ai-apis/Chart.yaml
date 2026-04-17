@@ -1,0 +1,18 @@
+apiVersion: v2
+name: ai-apis
+description: >
+  Helm chart for the ai-apis project, bundling Whisper API, Stable Diffusion API,
+  Text Classification API, Telegram Bot, Nextcloud Sync CronJob, and MongoDB.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - whisper
+  - stable-diffusion
+  - text-classification
+  - telegram-bot
+  - nextcloud
+  - mongodb
+  - gpu
+maintainers:
+  - name: Max Brede

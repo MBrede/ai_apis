@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-stable-diffusion
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+    # Image generation requests can be long-running — extend timeouts accordingly
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ .Values.stableDiffusion.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-stable-diffusion
+                port:
+                  name: http
+  {{- if .Values.stableDiffusion.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.stableDiffusion.ingress.host | quote }}
+      secretName: {{ .Release.Name }}-sd-tls
+  {{- end }}

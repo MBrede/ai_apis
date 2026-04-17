@@ -1,0 +1,69 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-nextcloud-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nextcloud-sync
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  schedule: {{ .Values.nextcloudSync.schedule | quote }}
+  # Keep the last 3 successful job pods for log inspection
+  successfulJobsHistoryLimit: 3
+  # Keep the last failed job pod for debugging
+  failedJobsHistoryLimit: 1
+  # Prevent overlapping runs if a previous job is still executing
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "ai-apis.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: nextcloud-sync
+        spec:
+          # No GPU is needed for the sync job — it only calls the Whisper API
+          restartPolicy: OnFailure
+          containers:
+            - name: nextcloud-sync
+              image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.nextcloudSync.image) }}
+              imagePullPolicy: Always
+              env:
+                - name: NEXTCLOUD_URL
+                  value: {{ .Values.nextcloudSync.nextcloudUrl | quote }}
+                - name: NEXTCLOUD_USER
+                  value: {{ .Values.nextcloudSync.nextcloudUser | quote }}
+                - name: NEXTCLOUD_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ai-apis-secrets
+                      key: nextcloudPassword
+                - name: NEXTCLOUD_FOLDER
+                  value: {{ .Values.nextcloudSync.nextcloudFolder | quote }}
+                # Construct the full Whisper service URL from the release name and port
+                - name: WHISPER_URL
+                  value: {{ printf "http://%s-whisper:%v" .Release.Name .Values.whisper.port | quote }}
+                - name: WHISPER_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: ai-apis-secrets
+                      key: apiKey
+                - name: NUM_SPEAKERS
+                  value: {{ .Values.nextcloudSync.numSpeakers | quote }}
+                - name: MIN_SPEAKERS
+                  value: {{ .Values.nextcloudSync.minSpeakers | quote }}
+                - name: MAX_SPEAKERS
+                  value: {{ .Values.nextcloudSync.maxSpeakers | quote }}
+                - name: WHISPER_TIMEOUT
+                  value: {{ .Values.nextcloudSync.whisperTimeout | quote }}
+                {{- include "ai-apis.keycloakEnv" . | nindent 16 }}
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi

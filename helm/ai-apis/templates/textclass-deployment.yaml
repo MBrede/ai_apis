@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-text-classification
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  # Only one replica is supported because the cache PVC is ReadWriteOnce
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai-apis.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: text-classification
+  template:
+    metadata:
+      labels:
+        {{- include "ai-apis.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: text-classification
+    spec:
+      nodeSelector:
+        {{- include "ai-apis.gpuNodeSelector" . | nindent 8 }}
+      containers:
+        - name: text-classification
+          image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.textClassification.image) }}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: {{ .Values.textClassification.port }}
+              protocol: TCP
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: apiKey
+            - name: USE_MONGODB
+              value: {{ .Values.global.useMongodb | quote }}
+            - name: MONGODB_DB
+              value: {{ .Values.mongodb.database | quote }}
+            # MONGO_USER and MONGO_PASSWORD must appear before MONGODB_URL
+            # so that the $(VAR) substitution in MONGODB_URL resolves correctly.
+            - name: MONGO_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: mongoRootUser
+            - name: MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: mongoRootPassword
+            - name: MONGODB_URL
+              value: {{ include "ai-apis.mongodbUrl" . | quote }}
+            {{- include "ai-apis.keycloakEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: textclass-cache
+              mountPath: /root/.cache
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              nvidia.com/gpu: 1
+      volumes:
+        - name: textclass-cache
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-textclass-cache

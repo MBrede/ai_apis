@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-whisper
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whisper
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+    # Increase the proxy read timeout to accommodate long transcription requests
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ .Values.whisper.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-whisper
+                port:
+                  name: http
+  {{- if .Values.whisper.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.whisper.ingress.host | quote }}
+      secretName: {{ .Release.Name }}-whisper-tls
+  {{- end }}
