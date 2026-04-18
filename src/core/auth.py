@@ -130,7 +130,7 @@ def _validate_jwt(token: str) -> dict:
     client = _get_jwks_client()
     signing_key = client.get_signing_key_from_jwt(token)
 
-    decode_opts: dict = {"verify_exp": True, "verify_iat": False}
+    decode_opts: dict = {"verify_exp": True}
     audience = config.KEYCLOAK_CLIENT_ID  # None → skip audience check
 
     payload = pyjwt.decode(
