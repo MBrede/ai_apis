@@ -11,10 +11,18 @@ When KEYCLOAK_URL is not set, only API key authentication is used
 
 import logging
 import time
+from typing import TYPE_CHECKING
 
-from fastapi import Request
 from src.core.config import config
 from src.core.database import get_mongo_db
+
+if TYPE_CHECKING:
+    from fastapi import Request
+
+try:
+    from fastapi import Request as _Request  # noqa: F401
+except ImportError:
+    pass  # fastapi not available in nextcloud sync container
 
 logger = logging.getLogger(__name__)
 
@@ -388,7 +396,7 @@ async def _verify_admin_key_impl(api_key: str | None, authorization: str | None 
 # ---------------------------------------------------------------------------
 
 
-async def verify_api_key(request: Request, api_key: str | None = None) -> str:
+async def verify_api_key(request: "Request", api_key: str | None = None) -> str:
     """FastAPI dependency — verifies JWT Bearer token or API key.
 
     Usage::
@@ -404,7 +412,7 @@ async def verify_api_key(request: Request, api_key: str | None = None) -> str:
     return await _verify_api_key_impl(api_key, authorization=authorization)
 
 
-async def verify_admin_key(request: Request, api_key: str | None = None) -> str:
+async def verify_admin_key(request: "Request", api_key: str | None = None) -> str:
     """FastAPI dependency — verifies admin JWT role or admin API key."""
     authorization = request.headers.get("Authorization")
     return await _verify_admin_key_impl(api_key, authorization=authorization)
