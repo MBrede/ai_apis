@@ -47,18 +47,21 @@ spec:
             # (through nginx) rather than the internal service name — otherwise the
             # port mismatch (app port ≠ 8080) prevents KEDA from triggering scale-up.
             {{- if .Values.keda.enabled }}
+            {{- /* When KEDA is enabled, services are ExternalName → interceptor on 8080.
+                   Use the k8s service name (in-cluster DNS) so the bot doesn't need
+                   to reach an external IP via nip.io (hairpin NAT not available). */}}
             - name: SD_HOST
-              value: {{ .Values.stableDiffusion.ingress.internalHost | quote }}
+              value: {{ printf "%s-stable-diffusion" .Release.Name | quote }}
             - name: SD_PORT
-              value: "80"
+              value: "8080"
             - name: WHISPER_HOST
-              value: {{ .Values.whisper.ingress.internalHost | quote }}
+              value: {{ printf "%s-whisper" .Release.Name | quote }}
             - name: WHISPER_PORT
-              value: "80"
+              value: "8080"
             - name: TEXT_CLASSIFICATION_HOST
-              value: {{ .Values.textClassification.ingress.host | quote }}
+              value: {{ printf "%s-text-classification" .Release.Name | quote }}
             - name: TEXT_CLASSIFICATION_PORT
-              value: "80"
+              value: "8080"
             {{- else }}
             - name: SD_HOST
               value: {{ printf "%s-stable-diffusion" .Release.Name | quote }}
