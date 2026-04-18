@@ -124,7 +124,7 @@ def _make_webdav_client() -> tuple[Client, str]:
     client = Client(
         {
             "webdav_hostname": url,
-            "webdav_login": user,
+            "webdav_login": dav_user,
             "webdav_password": password,
         }
     )
