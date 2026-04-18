@@ -201,19 +201,27 @@ def get_service_token() -> str | None:
 def build_auth_headers(api_key: str | None = None) -> dict[str, str]:
     """Return the correct auth headers for outbound API calls.
 
-    Prefers Keycloak Bearer token when configured, otherwise returns the
-    legacy X-API-Key header so callers don't need to know which is active.
+    When Keycloak is configured the Bearer token is always included.
+    If ``api_key`` is also provided it is sent as ``X-API-Key`` alongside
+    the Bearer token — this lets admin endpoints fall back to the API key
+    check when the service-account token lacks the admin role.
+
+    When Keycloak is not configured only ``X-API-Key`` is sent.
 
     Args:
-        api_key: Fallback API key (used when Keycloak is not configured).
+        api_key: API key to include (admin or regular). Defaults to
+                 ``config.API_KEY`` when not provided.
 
     Returns:
-        Dict with either Authorization or X-API-Key header.
+        Headers dict ready to pass to ``requests`` or ``aiohttp``.
     """
     token = get_service_token()
-    if token:
-        return {"Authorization": f"Bearer {token}"}
     key = api_key or config.API_KEY or ""
+    if token:
+        headers: dict[str, str] = {"Authorization": f"Bearer {token}"}
+        if key:
+            headers["X-API-Key"] = key
+        return headers
     return {"X-API-Key": key}
 
 
@@ -324,6 +332,11 @@ async def _verify_admin_key_impl(api_key: str | None, authorization: str | None 
         return "auth_disabled"
 
     # --- Keycloak JWT path ---
+    # If the token is valid and has the admin role → accept.
+    # If the token is valid but lacks the role → fall through to API key check
+    # so service accounts can still use ADMIN_API_KEY as X-API-Key alongside
+    # (or instead of) a Bearer token.
+    # If the token is invalid (bad signature, expired) → reject immediately.
     if config.KEYCLOAK_URL and authorization and authorization.startswith("Bearer "):
         token = authorization[len("Bearer "):]
         try:
@@ -338,9 +351,9 @@ async def _verify_admin_key_impl(api_key: str | None, authorization: str | None 
         if config.KEYCLOAK_ADMIN_ROLE in _roles_from_payload(payload):
             logger.info("Admin role verified via Keycloak JWT")
             return f"keycloak:{payload.get('sub')}"
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Keycloak role '{config.KEYCLOAK_ADMIN_ROLE}' required for admin access",
+        # Valid token but no admin role — fall through to API key check
+        logger.debug(
+            "JWT lacks admin role '%s', falling back to API key check", config.KEYCLOAK_ADMIN_ROLE
         )
 
     # --- Admin API key path ---
