@@ -14,6 +14,7 @@ from datetime import datetime
 import torch
 import whisper
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
+from src.core.app_factory import create_app
 from fastapi.responses import JSONResponse
 from pyannote.audio import Pipeline
 
@@ -116,7 +117,7 @@ class DiarizationBuffer(Model_Buffer):
 whisper_buffer = WhisperBuffer()
 diarization_buffer = DiarizationBuffer()
 
-app = FastAPI()
+app = create_app()
 router = APIRouter()
 
 

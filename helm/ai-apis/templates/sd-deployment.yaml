@@ -24,6 +24,9 @@ spec:
         {{- include "ai-apis.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: stable-diffusion
     spec:
+      # Allow long-running model downloads to finish before pod is killed.
+      # Flux is ~30GB and can take 30+ minutes to download on first run.
+      terminationGracePeriodSeconds: 3600
       nodeSelector:
         {{- include "ai-apis.gpuNodeSelector" . | nindent 8 }}
       containers:

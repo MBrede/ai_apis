@@ -24,6 +24,7 @@ spec:
         {{- include "ai-apis.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: whisper
     spec:
+      terminationGracePeriodSeconds: 3600
       nodeSelector:
         {{- include "ai-apis.gpuNodeSelector" . | nindent 8 }}
       containers:
