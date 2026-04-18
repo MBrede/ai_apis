@@ -74,13 +74,24 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     exit 1
 fi
 
-# Export all variables from .env (handles key=value and key="value").
-# Filter to valid KEY=VALUE lines only — skips comments, blank lines, and any
-# bare words that bash would otherwise try to execute as commands.
-set -a
-# shellcheck disable=SC1090
-source <(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "${ENV_FILE}")
-set +a
+# Export all variables from .env.
+# Parses KEY=VALUE manually instead of sourcing the file directly so that
+# unquoted values containing spaces (e.g. cron schedules "0 2 * * *") are not
+# split by bash and executed as commands.
+while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip blank lines and comments
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    # Must match KEY=VALUE
+    [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*) ]] || continue
+    key="${BASH_REMATCH[1]}"
+    val="${BASH_REMATCH[2]}"
+    # Strip surrounding single or double quotes if present
+    if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+        val="${BASH_REMATCH[1]}"
+    fi
+    export "$key=$val"
+done < "${ENV_FILE}"
 
 # Unset vars that are docker-compose-specific / wrong for k8s
 ALL_IGNORE=("${BUILTIN_IGNORE[@]}" "${EXTRA_IGNORE[@]}")
