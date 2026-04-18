@@ -74,10 +74,12 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     exit 1
 fi
 
-# Export all variables from .env (handles key=value and key="value")
+# Export all variables from .env (handles key=value and key="value").
+# Filter to valid KEY=VALUE lines only — skips comments, blank lines, and any
+# bare words that bash would otherwise try to execute as commands.
 set -a
 # shellcheck disable=SC1090
-source "${ENV_FILE}"
+source <(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "${ENV_FILE}")
 set +a
 
 # Unset vars that are docker-compose-specific / wrong for k8s
