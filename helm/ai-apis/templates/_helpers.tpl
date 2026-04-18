@@ -71,6 +71,7 @@ Node selector that schedules a pod onto a node with an NVIDIA GPU.
 */}}
 {{- define "ai-apis.gpuNodeSelector" -}}
 nvidia.com/gpu.present: "true"
+nvidia.com/gpu.sharing-strategy: time-slicing
 {{- end }}
 
 {{/*
