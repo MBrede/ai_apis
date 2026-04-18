@@ -36,6 +36,10 @@ spec:
                   value: {{ .Values.nextcloudSync.nextcloudUrl | quote }}
                 - name: NEXTCLOUD_USER
                   value: {{ .Values.nextcloudSync.nextcloudUser | quote }}
+                {{- if .Values.nextcloudSync.nextcloudDavUser }}
+                - name: NEXTCLOUD_DAV_USER
+                  value: {{ .Values.nextcloudSync.nextcloudDavUser | quote }}
+                {{- end }}
                 - name: NEXTCLOUD_PASSWORD
                   valueFrom:
                     secretKeyRef:

@@ -195,8 +195,14 @@ nextcloudSync:
   # Base URL of the Nextcloud instance (e.g. https://nextcloud.example.com)
   nextcloudUrl: ""
 
-  # Nextcloud username used for WebDAV access
+  # Nextcloud login username (email or short name — used for authentication)
   nextcloudUser: ""
+
+  # Internal Nextcloud username used in the WebDAV path: /remote.php/dav/files/<user>/
+  # Only needed when the login credential differs from the internal username.
+  # Example: nextcloudUser=user@example.com, nextcloudDavUser=username
+  # Leave empty to use nextcloudUser for both auth and path.
+  nextcloudDavUser: ""
 
   # Nextcloud password — stored in the shared Secret
   nextcloudPassword: ""

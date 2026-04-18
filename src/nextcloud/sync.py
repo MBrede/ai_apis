@@ -115,6 +115,11 @@ def _make_webdav_client() -> tuple[Client, str]:
     user = os.environ["NEXTCLOUD_USER"]
     password = os.environ["NEXTCLOUD_PASSWORD"]
     folder = os.environ["NEXTCLOUD_FOLDER"].strip("/")
+    # NEXTCLOUD_DAV_USER: the internal Nextcloud username used in the WebDAV path.
+    # Defaults to NEXTCLOUD_USER. Set this when the login credential (email) differs
+    # from the internal username, e.g. NEXTCLOUD_USER=user@example.com but
+    # WebDAV path uses /remote.php/dav/files/username/.
+    dav_user = os.environ.get("NEXTCLOUD_DAV_USER") or user
 
     client = Client(
         {
@@ -123,7 +128,7 @@ def _make_webdav_client() -> tuple[Client, str]:
             "webdav_password": password,
         }
     )
-    remote_root = f"/remote.php/dav/files/{user}/{folder}"
+    remote_root = f"/remote.php/dav/files/{dav_user}/{folder}"
     return client, remote_root
 
 

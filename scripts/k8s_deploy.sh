@@ -282,6 +282,7 @@ nextcloudSync:
   schedule: "$(val "${NEXTCLOUD_SCHEDULE:-0 2 * * *}")"
   nextcloudUrl: "$(val "${NEXTCLOUD_URL:-}")"
   nextcloudUser: "$(val "${NEXTCLOUD_USER:-}")"
+  nextcloudDavUser: "$(val "${NEXTCLOUD_DAV_USER:-}")"
   nextcloudPassword: "$(val "${NEXTCLOUD_PASSWORD:-}")"
   nextcloudFolder: "$(val "${NEXTCLOUD_FOLDER:-}")"
   numSpeakers: "$(val "${NUM_SPEAKERS:-}")"

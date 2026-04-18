@@ -11,6 +11,8 @@ Add these to your `.env` file:
 
 ```env
 # Nextcloud connection
+# NEXTCLOUD_URL must be the server base URL only — no /remote.php/... suffix.
+# The sync script constructs the full WebDAV path itself from the username and folder.
 NEXTCLOUD_URL=https://cloud.example.com
 NEXTCLOUD_USER=myuser
 NEXTCLOUD_PASSWORD=mypassword
@@ -108,10 +110,17 @@ SPEAKER_01: Thank you for having me.
 
 ## Cron schedule
 
-The default schedule inside the container is `0 2 * * *` (02:00 daily).
-To change it, edit the `RUN echo "..."` line in
-[docker/Dockerfile.nextcloud](../../docker/Dockerfile.nextcloud) and rebuild:
+**Kubernetes:** The schedule is set via `.env` / `my-values.yaml`:
 
 ```bash
-docker compose up -d --build nextcloud_sync
+NEXTCLOUD_SCHEDULE=0 2 * * *   # daily at 02:00
 ```
+
+The value is passed directly to the Kubernetes CronJob — no image rebuild needed. Apply with:
+
+```bash
+./scripts/k8s_deploy.sh --values-only
+helm upgrade ai-apis helm/ai-apis --namespace ai-apis --values my-values.yaml
+```
+
+**Docker Compose:** The default schedule is `0 2 * * *` (02:00 daily).
