@@ -244,6 +244,7 @@ whisper:
   ingress:
     host: "$(val "${WHISPER_INGRESS_HOST:-whisper.example.com}")"
     tls: ${WHISPER_INGRESS_TLS:-false}
+    internalHost: "$(val "${WHISPER_INTERNAL_HOST:-whisper-internal.cluster.local}")"
 
 stableDiffusion:
   image: ai-apis-stable-diffusion
@@ -256,11 +257,19 @@ stableDiffusion:
   ingress:
     host: "$(val "${SD_INGRESS_HOST:-sd.example.com}")"
     tls: ${SD_INGRESS_TLS:-false}
+    internalHost: "$(val "${SD_INTERNAL_HOST:-sd-internal.cluster.local}")"
 
 textClassification:
   image: ai-apis-text-classification
   port: 8000
   cacheStorage: 10Gi
+  ingress:
+    host: "$(val "${TEXTCLASS_INGRESS_HOST:-textclass.cluster.local}")"
+
+keda:
+  enabled: ${KEDA_ENABLED:-false}
+  idleTimeout: ${KEDA_IDLE_TIMEOUT:-1800}
+  scalingTimeout: ${KEDA_SCALING_TIMEOUT:-300}
 
 telegramBot:
   image: ai-apis-bot
