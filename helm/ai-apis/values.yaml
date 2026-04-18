@@ -132,6 +132,25 @@ telegramBot:
 # ============================================================
 # Nextcloud transcription sync (Kubernetes CronJob)
 # ============================================================
+
+# ============================================================
+# KEDA HTTP add-on — scale GPU services to zero when idle
+# Requires KEDA + KEDA HTTP add-on installed in the cluster.
+# When enabled, the ingress routes through the KEDA interceptor which
+# queues requests and scales the deployment from 0 to 1 on demand.
+# GPU time-slice is released when pods are scaled to zero.
+# ============================================================
+keda:
+  # Set to true to enable scale-to-zero for Whisper and Stable Diffusion
+  enabled: false
+
+  # Seconds of inactivity before scaling to zero (default: 30 minutes)
+  idleTimeout: 1800
+
+  # Seconds to wait for a pod to become ready before returning an error
+  # during scale-from-zero. Should exceed model load time from PVC cache.
+  scalingTimeout: 300
+
 # ============================================================
 # Keycloak / OIDC authentication (optional)
 # Leave keycloak.url empty to use plain API key auth only.

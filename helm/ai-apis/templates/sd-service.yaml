@@ -1,3 +1,46 @@
+{{- if .Values.keda.enabled }}
+# ── KEDA mode: app service (ClusterIP to pods, internal name) ────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-stable-diffusion-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.stableDiffusion.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "ai-apis.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+---
+# ── KEDA mode: interceptor service (ExternalName → KEDA interceptor proxy) ───
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-stable-diffusion
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stable-diffusion
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+{{- else }}
+# ── Normal mode: direct ClusterIP service ────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
@@ -18,3 +61,4 @@ spec:
   selector:
     {{- include "ai-apis.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: stable-diffusion
+{{- end }}

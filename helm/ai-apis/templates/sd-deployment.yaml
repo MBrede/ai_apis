@@ -9,8 +9,11 @@ metadata:
   annotations:
     helm.sh/chart: {{ include "ai-apis.chart" . }}
 spec:
-  # Only one replica is supported because all three PVCs are ReadWriteOnce
+  # Only one replica is supported because all three PVCs are ReadWriteOnce.
+  # When keda.enabled, replicas are managed by the HTTPScaledObject (can be 0).
+  {{- if not .Values.keda.enabled }}
   replicas: 1
+  {{- end }}
   selector:
     matchLabels:
       {{- include "ai-apis.selectorLabels" . | nindent 6 }}

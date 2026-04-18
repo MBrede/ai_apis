@@ -13,6 +13,11 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     # Allow large audio/video file uploads
     nginx.ingress.kubernetes.io/proxy-body-size: "2g"
+    {{- if .Values.keda.enabled }}
+    # Required for nginx to resolve the ExternalName service pointing to the
+    # KEDA HTTP interceptor in the keda namespace.
+    nginx.ingress.kubernetes.io/service-upstream: "true"
+    {{- end }}
 spec:
   ingressClassName: nginx
   rules:
