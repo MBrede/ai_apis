@@ -166,9 +166,10 @@ if [[ "${VALUES_ONLY}" == "false" ]]; then
         full_image="${REGISTRY}/${REPO}/${name}:${TAG}"
         echo ""
         echo "--- Building ${full_image} from ${dockerfile}"
-        docker build \
-            --file "${ROOT_DIR}/${dockerfile}" \
+        docker buildx build \
+            -f "${ROOT_DIR}/${dockerfile}" \
             --tag  "${full_image}" \
+            --network=host \
             "${ROOT_DIR}"
     done
 fi
@@ -239,7 +240,7 @@ whisper:
   image: ai-apis-whisper
   port: 8080
   hfToken: "$(val "${HF_TOKEN}")"
-  cacheStorage: 20Gi
+  cacheStorage: 200Gi
   defaultModel: "$(val "${DEFAULT_WHISPER_MODEL:-turbo}")"
   ingress:
     host: "$(val "${WHISPER_INGRESS_HOST:-whisper.example.com}")"
@@ -251,8 +252,8 @@ stableDiffusion:
   port: 1234
   hfToken: "$(val "${HF_TOKEN}")"
   civitKey: "$(val "${CIVIT_KEY:-}")"
-  cacheStorage: 20Gi
-  modelsStorage: 50Gi
+  cacheStorage: 200Gi
+  modelsStorage: 200Gi
   lorasStorage: 5Gi
   ingress:
     host: "$(val "${SD_INGRESS_HOST:-sd.example.com}")"

@@ -113,14 +113,3 @@ log_info "Or use 'latest' for the most recent version:"
 echo ""
 echo "  FROM ${FULL_IMAGE_NAME}:latest"
 echo ""
-
-# Optional: Scan for vulnerabilities (requires Docker Scout or Trivy)
-if command -v trivy &> /dev/null; then
-    log_info "Scanning image for vulnerabilities with Trivy..."
-    trivy image "${FULL_IMAGE_NAME}:${VERSION}"
-else
-    log_warning "Trivy not installed. Skipping vulnerability scan."
-    log_info "Install Trivy for security scanning: https://github.com/aquasecurity/trivy"
-fi
-
-log_success "Build and push completed successfully!"
