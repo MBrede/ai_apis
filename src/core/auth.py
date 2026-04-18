@@ -139,6 +139,7 @@ def _validate_jwt(token: str) -> dict:
         algorithms=["RS256"],
         audience=audience,
         options=decode_opts,
+        leeway=60,  # tolerate up to 60s clock skew between nodes
     )
     return payload
 
