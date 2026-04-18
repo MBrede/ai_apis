@@ -11,6 +11,8 @@ metadata:
     # Increase the proxy read timeout to accommodate long transcription requests
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Allow large audio/video file uploads
+    nginx.ingress.kubernetes.io/proxy-body-size: "2g"
 spec:
   ingressClassName: nginx
   rules:

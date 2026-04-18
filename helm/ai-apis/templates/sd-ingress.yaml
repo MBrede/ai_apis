@@ -11,6 +11,8 @@ metadata:
     # Image generation requests can be long-running — extend timeouts accordingly
     nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # Allow large image uploads for img2img workflows
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
 spec:
   ingressClassName: nginx
   rules:
