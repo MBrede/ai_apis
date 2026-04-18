@@ -5,11 +5,21 @@
 #   ./scripts/k8s_deploy.sh [OPTIONS]
 #
 # Options:
-#   --values-only    Generate my-values.yaml only, skip build and push
-#   --no-push        Build images but do not push to registry
-#   --tag TAG        Override image tag (default: git SHA or "latest")
-#   --env FILE       Path to .env file (default: .env)
-#   -h, --help       Show this help
+#   --values-only          Generate my-values.yaml only, skip build and push
+#   --no-push              Build images but do not push to registry
+#   --tag TAG              Override image tag (default: git SHA or "latest")
+#   --env FILE             Path to .env file (default: .env)
+#   --ignore-env VAR,...   Comma-separated extra .env vars to ignore when
+#                          generating my-values.yaml (in addition to the
+#                          built-in ignore list below)
+#   -h, --help             Show this help
+#
+# Built-in ignored vars (docker-compose specific, wrong for k8s):
+#   MONGODB_URL   — localhost URL; helm constructs the in-cluster URL instead
+#   WHISPER_HOST  — compose service name; k8s uses the Service DNS name
+#   WHISPER_PORT  — only the container port matters; ingress handles the rest
+#   SD_HOST       — same as WHISPER_HOST
+#   SD_PORT       — same as WHISPER_PORT
 
 set -euo pipefail
 
@@ -24,6 +34,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_VALUES="${ROOT_DIR}/my-values.yaml"
 
+# Vars that are meaningful for docker-compose but wrong/misleading in k8s.
+# These are unset after sourcing .env so they never leak into my-values.yaml.
+BUILTIN_IGNORE=(
+    MONGODB_URL
+    WHISPER_HOST
+    SD_HOST
+)
+
+EXTRA_IGNORE=()
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -33,8 +53,12 @@ while [[ $# -gt 0 ]]; do
         --no-push)     NO_PUSH=true;     shift ;;
         --tag)         TAG="$2";         shift 2 ;;
         --env)         ENV_FILE="$2";    shift 2 ;;
+        --ignore-env)
+            IFS=',' read -ra EXTRA_IGNORE <<< "$2"
+            shift 2
+            ;;
         -h|--help)
-            head -14 "${BASH_SOURCE[0]}" | tail -12
+            head -22 "${BASH_SOURCE[0]}" | tail -20
             exit 0
             ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -55,6 +79,15 @@ set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
+
+# Unset vars that are docker-compose-specific / wrong for k8s
+ALL_IGNORE=("${BUILTIN_IGNORE[@]}" "${EXTRA_IGNORE[@]}")
+if [[ ${#ALL_IGNORE[@]} -gt 0 ]]; then
+    echo "==> Ignoring .env vars: ${ALL_IGNORE[*]}"
+    for var in "${ALL_IGNORE[@]}"; do
+        unset "${var}" 2>/dev/null || true
+    done
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve image tag
@@ -142,7 +175,7 @@ fi
 echo ""
 echo "==> Writing ${OUTPUT_VALUES}"
 
-# Helper: emit a YAML string value, or empty quotes if unset
+# Helper: emit a YAML string value, or empty string if unset
 val() { printf '%s' "${1:-}"; }
 
 cat > "${OUTPUT_VALUES}" << YAML
@@ -157,7 +190,7 @@ global:
   apiKey: "$(val "${API_KEY}")"
   adminApiKey: "$(val "${ADMIN_API_KEY:-}")"
   useMongodb: ${USE_MONGODB:-true}
-  mongodbUrl: ""   # auto-constructed from mongodb.rootUser / rootPassword below
+  mongodbUrl: ""   # intentionally empty — helm constructs the in-cluster URL
 
 keycloak:
   url: "$(val "${KEYCLOAK_URL:-}")"
@@ -175,7 +208,7 @@ mongodb:
 
 whisper:
   image: ai-apis-whisper
-  port: ${WHISPER_PORT:-8080}
+  port: 8080
   hfToken: "$(val "${HF_TOKEN}")"
   cacheStorage: 20Gi
   defaultModel: "$(val "${DEFAULT_WHISPER_MODEL:-turbo}")"
@@ -185,7 +218,7 @@ whisper:
 
 stableDiffusion:
   image: ai-apis-stable-diffusion
-  port: ${SD_PORT:-1234}
+  port: 1234
   hfToken: "$(val "${HF_TOKEN}")"
   civitKey: "$(val "${CIVIT_KEY:-}")"
   cacheStorage: 20Gi
