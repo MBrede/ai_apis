@@ -208,3 +208,10 @@ __marimo__/
 
 
 *.kate-swp
+
+# Kubernetes / Helm — generated files containing secrets
+my-values.yaml
+*-values.yaml
+*.values.yaml
+kubeconfig
+*.kubeconfig
