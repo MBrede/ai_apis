@@ -120,7 +120,7 @@ def _make_webdav_client() -> tuple[Client, str]:
     # from the internal username, e.g. NEXTCLOUD_USER=user@example.com but
     # WebDAV path uses /remote.php/dav/files/username/.
     dav_user = os.environ.get("NEXTCLOUD_DAV_USER") or user
-
+    print(f"Trying to access {url} folder as {user}")
     client = Client(
         {
             "webdav_hostname": url,

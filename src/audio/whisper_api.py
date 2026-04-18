@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pyannote.audio import Pipeline
 
-from src.core.auth import verify_api_key
+from src.core.auth_dependencies import verify_api_key
 from src.core.buffer_class import Model_Buffer
 from src.core.config import config
 

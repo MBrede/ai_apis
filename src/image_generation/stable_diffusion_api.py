@@ -33,7 +33,7 @@ from PIL import Image
 from pydantic import BaseModel
 from tqdm import tqdm
 
-from src.core.auth import verify_admin_key, verify_api_key
+from src.core.auth_dependencies import verify_admin_key, verify_api_key
 from src.core.buffer_class import Model_Buffer
 from src.core.config import config
 
