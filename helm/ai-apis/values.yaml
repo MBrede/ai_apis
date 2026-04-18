@@ -64,10 +64,13 @@ whisper:
   defaultModel: turbo
 
   ingress:
-    # Hostname for the Whisper Ingress resource
+    # Hostname for the Whisper Ingress resource (external, with TLS)
     host: whisper.example.com
     # Set to true to enable TLS (requires a cert-manager issuer or manual secret)
     tls: false
+    # Internal hostname used by the bot when keda.enabled — HTTP only, no TLS.
+    # Must be resolvable via the cluster's nginx ingress (nip.io or cluster DNS).
+    internalHost: whisper-internal.cluster.local
 
 # ============================================================
 # Stable Diffusion image-generation API
@@ -95,10 +98,12 @@ stableDiffusion:
   lorasStorage: 5Gi
 
   ingress:
-    # Hostname for the Stable Diffusion Ingress resource
+    # Hostname for the Stable Diffusion Ingress resource (external, with TLS)
     host: sd.example.com
     # Set to true to enable TLS
     tls: false
+    # Internal hostname used by the bot when keda.enabled — HTTP only, no TLS.
+    internalHost: sd-internal.cluster.local
 
 # ============================================================
 # Text Classification / Sentiment Analysis API
@@ -112,6 +117,11 @@ textClassification:
 
   # Size of the PVC mounted at /root/.cache for transformer model caching
   cacheStorage: 10Gi
+
+  # Internal ingress used by KEDA to intercept bot→textclass calls for scale-to-zero.
+  # Not exposed externally — host only needs to be a unique name the bot can resolve via ingress.
+  ingress:
+    host: textclass.cluster.local
 
 # ============================================================
 # Telegram Bot (long-polling, no ingress required)

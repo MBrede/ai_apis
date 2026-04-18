@@ -1,3 +1,69 @@
+{{- if .Values.keda.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-text-classification-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.textClassification.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "ai-apis.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-text-classification
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+---
+# Internal ingress so the KEDA interceptor can route bot→textclass calls by Host header
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-text-classification
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+    nginx.ingress.kubernetes.io/service-upstream: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ .Values.textClassification.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-text-classification
+                port:
+                  name: http
+{{- else }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -18,3 +84,4 @@ spec:
   selector:
     {{- include "ai-apis.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: text-classification
+{{- end }}

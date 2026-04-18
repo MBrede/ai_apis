@@ -1,0 +1,25 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: whisper-tls
+  namespace: ai-apis
+spec:
+  secretName: ai-apis-whisper-tls
+  issuerRef:
+    name: selfsigned-ca-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - whisper.${FLOATING_IP}.nip.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sd-tls
+  namespace: ai-apis
+spec:
+  secretName: ai-apis-sd-tls
+  issuerRef:
+    name: selfsigned-ca-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - sd.${FLOATING_IP}.nip.io

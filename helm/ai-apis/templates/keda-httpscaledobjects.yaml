@@ -1,7 +1,7 @@
 {{- if .Values.keda.enabled }}
 # ── KEDA HTTP add-on: scale Whisper to zero when idle ────────────────────────
-# Traffic flow: nginx ingress → ExternalName service → KEDA interceptor (keda ns)
-#               → buffers requests → scales whisper deployment → forwards request
+# Traffic flow: nginx ingress → ExternalName svc → KEDA interceptor (keda ns)
+#               → queues request → scales deployment 0→1 → forwards to *-app svc
 apiVersion: http.keda.sh/v1alpha1
 kind: HTTPScaledObject
 metadata:
@@ -13,6 +13,8 @@ metadata:
 spec:
   hosts:
     - {{ .Values.whisper.ingress.host | quote }}
+    - {{ .Values.whisper.ingress.internalHost | quote }}
+    - {{ printf "%s-whisper" .Release.Name | quote }}
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
@@ -22,10 +24,7 @@ spec:
   replicas:
     min: 0
     max: 1
-  # Seconds of no traffic before scaling to zero — frees the GPU time-slice
   scaledownPeriod: {{ .Values.keda.idleTimeout }}
-  # Seconds to wait for the pod to become ready before failing a queued request
-  scalingModifiers: {}
   targetPendingRequests: 1
 ---
 # ── KEDA HTTP add-on: scale Stable Diffusion to zero when idle ───────────────
@@ -40,6 +39,7 @@ metadata:
 spec:
   hosts:
     - {{ .Values.stableDiffusion.ingress.host | quote }}
+    - {{ .Values.stableDiffusion.ingress.internalHost | quote }}
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
@@ -49,7 +49,32 @@ spec:
   replicas:
     min: 0
     max: 1
-  # Seconds of no traffic before scaling to zero — frees the GPU time-slice
+  scaledownPeriod: {{ .Values.keda.idleTimeout }}
+  targetPendingRequests: 1
+---
+# ── KEDA HTTP add-on: scale Text Classification to zero when idle ─────────────
+# No external ingress — bot calls via internal ingress host which also goes
+# through the KEDA interceptor for scale-from-zero.
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: {{ .Release.Name }}-text-classification
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+spec:
+  hosts:
+    - {{ .Values.textClassification.ingress.host | quote }}
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-text-classification
+    service: {{ .Release.Name }}-text-classification-app
+    port: {{ .Values.textClassification.port }}
+  replicas:
+    min: 0
+    max: 1
   scaledownPeriod: {{ .Values.keda.idleTimeout }}
   targetPendingRequests: 1
 {{- end }}

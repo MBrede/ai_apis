@@ -8,14 +8,10 @@ metadata:
     app.kubernetes.io/component: whisper
   annotations:
     helm.sh/chart: {{ include "ai-apis.chart" . }}
-    # Increase the proxy read timeout to accommodate long transcription requests
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    # Allow large audio/video file uploads
     nginx.ingress.kubernetes.io/proxy-body-size: "2g"
     {{- if .Values.keda.enabled }}
-    # Required for nginx to resolve the ExternalName service pointing to the
-    # KEDA HTTP interceptor in the keda namespace.
     nginx.ingress.kubernetes.io/service-upstream: "true"
     {{- end }}
 spec:
@@ -37,3 +33,36 @@ spec:
         - {{ .Values.whisper.ingress.host | quote }}
       secretName: {{ .Release.Name }}-whisper-tls
   {{- end }}
+{{- if .Values.keda.enabled }}
+---
+# Internal HTTP-only ingress for bot→whisper calls via KEDA interceptor.
+# Separate from the external ingress so TLS settings are not shared.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-whisper-internal
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whisper
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "2g"
+    nginx.ingress.kubernetes.io/service-upstream: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ .Values.whisper.ingress.internalHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-whisper
+                port:
+                  name: http
+{{- end }}

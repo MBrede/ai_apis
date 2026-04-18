@@ -25,6 +25,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 COPY pyproject.toml README.md /app/
 RUN uv pip install -e "/app[nextcloud]"
 
+COPY src/core/ /app/src/core/
 COPY src/nextcloud/ /app/src/nextcloud/
 COPY .env.example /app/.env
 

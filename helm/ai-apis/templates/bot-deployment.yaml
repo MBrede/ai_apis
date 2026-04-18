@@ -41,7 +41,21 @@ spec:
               value: {{ .Values.telegramBot.ollamaHost | quote }}
             - name: OLLAMA_PORT
               value: {{ .Values.telegramBot.ollamaPort | quote }}
-            # Internal service hostnames for Stable Diffusion and Whisper
+            # When KEDA is enabled, SD and Whisper are scaled to zero and fronted by
+            # the KEDA HTTP interceptor which listens on port 8080. The interceptor
+            # routes by Host header, so the bot must call via the ingress hostname
+            # (through nginx) rather than the internal service name — otherwise the
+            # port mismatch (app port ≠ 8080) prevents KEDA from triggering scale-up.
+            {{- if .Values.keda.enabled }}
+            - name: SD_HOST
+              value: {{ .Values.stableDiffusion.ingress.internalHost | quote }}
+            - name: SD_PORT
+              value: "80"
+            - name: WHISPER_HOST
+              value: {{ .Values.whisper.ingress.internalHost | quote }}
+            - name: WHISPER_PORT
+              value: "80"
+            {{- else }}
             - name: SD_HOST
               value: {{ printf "%s-stable-diffusion" .Release.Name | quote }}
             - name: SD_PORT
@@ -50,6 +64,7 @@ spec:
               value: {{ printf "%s-whisper" .Release.Name | quote }}
             - name: WHISPER_PORT
               value: {{ .Values.whisper.port | quote }}
+            {{- end }}
             - name: USE_MONGODB
               value: {{ .Values.global.useMongodb | quote }}
             - name: MONGODB_DB
