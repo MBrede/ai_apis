@@ -67,15 +67,16 @@ stable-diffusion-only = [
 
 whisper-only = [
     "openai-whisper>=20250625",
+    "whisperx>=3.8.5",
     "pyannote-audio>=4.0.1",
     "ffmpeg-python>=0.2.0",
     "python-multipart>=0.0.20",
 ]
 
 text-analysis-only = [
-    "transformers>=4.57.1",
-    "setfit>=1.1.3",
-    "huggingface-hub>=0.26.5",
+    "transformers==4.57.6",
+    "setfit",
+    "huggingface-hub==0.36.0",
 ]
 
 # Full service dependencies (including base)

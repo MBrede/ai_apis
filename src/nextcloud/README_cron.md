@@ -108,6 +108,22 @@ SPEAKER_00: Hello, welcome to the interview.
 SPEAKER_01: Thank you for having me.
 ```
 
+## Whisper pre-warming
+
+Whisper scales to zero when idle (KEDA scale-from-zero). If the CronJob fires
+while Whisper is cold, requests return HTTP 502 until the pod is ready
+(typically 30–60 s). Without pre-warming the sync job fails immediately.
+
+The Kubernetes CronJob includes an **init container** (`warm-whisper`) that:
+1. Polls `GET /health` on the Whisper service every 15 s
+2. Exits once it receives any response other than 502
+3. Waits an additional 30 s for the model to fully load into GPU memory
+
+The main sync container only starts after the init container completes,
+guaranteeing Whisper is ready to accept requests. No GPU is held permanently.
+
+This does not apply to the Docker Compose setup (Whisper runs persistently there).
+
 ## Cron schedule
 
 **Kubernetes:** The schedule is set via `.env` / `my-values.yaml`:

@@ -118,10 +118,13 @@ textClassification:
   # Size of the PVC mounted at /root/.cache for transformer model caching
   cacheStorage: 10Gi
 
-  # Internal ingress used by KEDA to intercept bot→textclass calls for scale-to-zero.
-  # Not exposed externally — host only needs to be a unique name the bot can resolve via ingress.
   ingress:
-    host: textclass.cluster.local
+    # External hostname for browser/API access (nip.io or real domain).
+    host: textclass.example.com
+    # Internal hostname used by the bot when keda.enabled — HTTP only, no TLS.
+    # Must be resolvable via the cluster's nginx ingress (nip.io or cluster DNS).
+    internalHost: textclass.cluster.local
+    tls: false
 
 # ============================================================
 # Telegram Bot (long-polling, no ingress required)

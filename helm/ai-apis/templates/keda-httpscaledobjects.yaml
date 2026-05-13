@@ -54,8 +54,6 @@ spec:
   targetPendingRequests: 1
 ---
 # ── KEDA HTTP add-on: scale Text Classification to zero when idle ─────────────
-# No external ingress — bot calls via internal ingress host which also goes
-# through the KEDA interceptor for scale-from-zero.
 apiVersion: http.keda.sh/v1alpha1
 kind: HTTPScaledObject
 metadata:
@@ -67,6 +65,7 @@ metadata:
 spec:
   hosts:
     - {{ .Values.textClassification.ingress.host | quote }}
+    - {{ .Values.textClassification.ingress.internalHost | quote }}
     - {{ printf "%s-text-classification" .Release.Name | quote }}
   scaleTargetRef:
     apiVersion: apps/v1

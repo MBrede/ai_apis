@@ -6,6 +6,7 @@ from fastapi import APIRouter, FastAPI
 from src.core.app_factory import create_app
 from fastapi.responses import JSONResponse
 from huggingface_hub import hf_api
+
 from setfit import SetFitModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
