@@ -10,6 +10,8 @@ import os
 import subprocess
 import tempfile
 from collections import Counter
+from contextlib import contextmanager
+from dataclasses import replace as dataclass_replace
 from datetime import datetime
 
 import torch
@@ -156,8 +158,19 @@ class WhisperXBuffer(Model_Buffer):
         num_speakers: int | None = None,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
+        align: bool = True,
+        initial_prompt: str | None = None,
     ) -> list[dict]:
-        """Transcribe, align, and diarize in one pass. Speaker constraints are optional."""
+        """Transcribe, align, and diarize in one pass. Speaker constraints are optional.
+
+        Args:
+            align: Run forced phoneme-level alignment before speaker assignment.
+                Improves speaker boundary precision but can degrade quality when
+                the wav2vec2 model has weak support for the detected language.
+                Set to False to use segment-level timestamps instead.
+            initial_prompt: Seed text injected via FasterWhisperPipeline.options.
+                Used to nudge Whisper towards retaining filler words.
+        """
         import whisperx
 
         if not self.is_loaded():
@@ -168,15 +181,24 @@ class WhisperXBuffer(Model_Buffer):
         audio = whisperx.load_audio(audio_path)
 
         # 1. Batched transcription of full audio (preserves context, far less hallucination)
-        result = self.model.transcribe(audio, batch_size=batch_size)
+        with _patched_initial_prompt(self.model, initial_prompt):
+            result = self.model.transcribe(audio, batch_size=batch_size)
         language = result["language"]
 
-        # 2. Forced phoneme-level alignment for word timestamps
-        model_a, metadata = self._align_model(language)
-        result = whisperx.align(
-            result["segments"], model_a, metadata, audio, self.device,
-            return_char_alignments=False,
-        )
+        # 2. Forced phoneme-level alignment for word timestamps (optional)
+        if align:
+            try:
+                model_a, metadata = self._align_model(language)
+                result = whisperx.align(
+                    result["segments"], model_a, metadata, audio, self.device,
+                    return_char_alignments=False,
+                )
+                logger.info("Alignment complete for language '%s'", language)
+            except Exception as exc:
+                logger.warning(
+                    "Alignment failed for language '%s' (%s) — falling back to segment timestamps",
+                    language, exc,
+                )
 
         # 3. Diarize (speaker constraints optional — pyannote can auto-detect)
         diarize_kwargs: dict = {}
@@ -279,6 +301,26 @@ def filter_transcription_chunks(
     return result
 
 
+FILLER_PROMPT = (
+    "Äh, ähm, also, ja, genau, hmm, nein, okay, ne, eben, halt, eigentlich, "
+    "um, uh, yeah, so, like, I mean, you know, erm, ah, right, well, actually"
+)
+
+
+@contextmanager
+def _patched_initial_prompt(pipeline, prompt: str | None):
+    """Temporarily inject initial_prompt into a FasterWhisperPipeline via its options dataclass."""
+    if not prompt or not hasattr(pipeline, "options"):
+        yield
+        return
+    original = pipeline.options
+    try:
+        pipeline.options = dataclass_replace(original, initial_prompt=prompt)
+        yield
+    finally:
+        pipeline.options = original
+
+
 app = create_app()
 router = APIRouter()
 
@@ -347,6 +389,8 @@ async def transcribe_diarize(
     max_words_per_second: float | None = 6.0,
     top_n_languages: int | None = 2,
     backend: str = "whisperx",
+    align: bool = True,
+    include_fillers: bool = False,
     api_key: str = Depends(verify_api_key),
 ):
     """Transcribe audio with speaker identification.
@@ -362,9 +406,13 @@ async def transcribe_diarize(
             chunks. Set to 0 to disable.
         num_speakers: (legacy backend only) exact speaker count.
             WhisperX backend accepts this as a hint but can auto-detect.
+        include_fillers: Inject a prompt nudging Whisper to retain filler words
+            (ähm, uhm, erm, etc.) that it would otherwise suppress.
+            Only effective with the whisperx backend.
     """
     wps_limit = max_words_per_second if max_words_per_second and max_words_per_second > 0 else None
     lang_limit = top_n_languages if top_n_languages and top_n_languages > 0 else None
+    filler_prompt = FILLER_PROMPT if include_fillers else None
 
     with open(file.filename, "wb") as f:
         file_contents = await file.read()
@@ -381,6 +429,8 @@ async def transcribe_diarize(
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
+                align=align,
+                initial_prompt=filler_prompt,
             )
         else:
             if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
