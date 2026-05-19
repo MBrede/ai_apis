@@ -195,6 +195,20 @@ def _collect_new_files(client: Client, remote_root: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _fillers_from_filename(stem: str) -> bool:
+    """Return True if the filename stem requests filler-word retention.
+
+    Recognised patterns (case-insensitive): ``_filler`` or ``_fillers`` anywhere in the stem.
+
+    Examples::
+
+        interview_fillers_2.mp3  → True
+        meeting_filler.wav       → True
+        lecture_2.mp3            → False
+    """
+    return bool(re.search(r"(?:^|_)fillers?(?:_|$)", stem, re.IGNORECASE))
+
+
 def _speakers_from_filename(stem: str) -> int | None:
     """Try to extract a speaker count encoded in a filename stem.
 
@@ -221,13 +235,16 @@ def _speakers_from_filename(stem: str) -> int | None:
     return None
 
 
-def _build_diarize_params(stem: str | None = None) -> dict[str, str | int]:
+def _build_diarize_params(stem: str | None = None) -> dict[str, str | int | bool]:
     """Build query parameters for the /transcribe_and_diarize/ endpoint.
 
     Speaker count priority:
       1. Encoded in the filename stem (e.g. ``interview_2.mp3`` → 2 speakers)
       2. ``NUM_SPEAKERS`` environment variable
       3. ``MIN_SPEAKERS`` + ``MAX_SPEAKERS`` environment variables
+
+    Filler-word retention is enabled when the filename stem contains ``_filler``
+    or ``_fillers`` (e.g. ``interview_fillers_2.mp3``).
 
     Args:
         stem: Filename stem of the file being transcribed (without extension).
@@ -238,9 +255,14 @@ def _build_diarize_params(stem: str | None = None) -> dict[str, str | int]:
     Raises:
         ValueError: If no speaker count can be determined.
     """
-    params: dict[str, str | int] = {
+    params: dict[str, str | int | bool] = {
         "model_to_use": os.environ.get("WHISPER_MODEL", "turbo"),
     }
+
+    # Filler-word retention from filename
+    if stem is not None and _fillers_from_filename(stem):
+        logger.info("Filler-word retention enabled from filename '%s'.", stem)
+        params["include_fillers"] = True
 
     # 1. Filename-encoded speaker count
     if stem is not None:
