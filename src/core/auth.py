@@ -161,7 +161,8 @@ def get_service_token() -> str | None:
     """Obtain a Bearer token for service-to-service calls via Client Credentials.
 
     Returns None if Keycloak is not configured (callers fall back to API key).
-    Token is cached until 30 seconds before expiry.
+    Token is cached until 30 seconds before expiry. Retries up to 3 times on
+    transient failures before raising.
     """
     global _cc_token, _cc_token_expires_at
 
@@ -178,22 +179,31 @@ def get_service_token() -> str | None:
         f"{config.KEYCLOAK_URL.rstrip('/')}/realms/{config.KEYCLOAK_REALM}"
         "/protocol/openid-connect/token"
     )
-    resp = _req.post(
-        token_url,
-        data={
-            "grant_type": "client_credentials",
-            "client_id": config.KEYCLOAK_CLIENT_ID,
-            "client_secret": config.KEYCLOAK_CLIENT_SECRET,
-        },
-        verify=config.KEYCLOAK_VERIFY_SSL,
-        timeout=10,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    _cc_token = data["access_token"]
-    _cc_token_expires_at = now + data.get("expires_in", 300) - 30  # 30-s buffer
-    logger.debug("Obtained new Keycloak service token (expires in %ds)", data.get("expires_in", 300))
-    return _cc_token
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(2 ** attempt)  # 2s, 4s
+        try:
+            resp = _req.post(
+                token_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": config.KEYCLOAK_CLIENT_ID,
+                    "client_secret": config.KEYCLOAK_CLIENT_SECRET,
+                },
+                verify=config.KEYCLOAK_VERIFY_SSL,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            _cc_token = data["access_token"]
+            _cc_token_expires_at = time.monotonic() + data.get("expires_in", 300) - 30
+            logger.debug("Obtained new Keycloak service token (expires in %ds)", data.get("expires_in", 300))
+            return _cc_token
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Keycloak token fetch attempt %d/3 failed: %s", attempt + 1, exc)
+    raise last_exc
 
 
 def build_auth_headers(api_key: str | None = None) -> dict[str, str]:
