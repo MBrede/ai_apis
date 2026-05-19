@@ -1,206 +1,174 @@
 # AI APIs Collection
 
-FastAPI microservices for AI models: Stable Diffusion, Whisper, Text Classification, and Telegram Bot.
+FastAPI microservices for AI models: Stable Diffusion, Whisper (with WhisperX diarization), Text Classification, Telegram Bot, and Nextcloud transcription sync.
 
-## Quick Start (Docker - Recommended)
+## Quick Start (Docker)
 
 ```bash
-# 1. Configure environment
 cp .env.example .env
 # Edit .env with your API keys and tokens
-
-# 2. Start all services
 docker-compose up -d
-
-# 3. Initialize MongoDB (optional, if USE_MONGODB=true)
-docker-compose exec mongodb python scripts/init_mongodb.py
 ```
 
-Services will be available at:
+Services:
 - Stable Diffusion: http://localhost:1234
 - Whisper: http://localhost:8080
 - Text Classification: http://localhost:8000
-- MongoDB: localhost:27017
 
-## Installation Options
-
-### Docker (Recommended)
-```bash
-docker-compose up -d
-```
-
-**Fast builds with pre-built base image:**
-
-For faster Docker builds, you can use a pre-built base image with all common dependencies. See [DOCKER.md](DOCKER.md#-fast-setup-with-pre-built-base-image) for details.
+## Kubernetes Deployment
 
 ```bash
-# Build and push base image once (requires Docker Hub account)
-./scripts/build_and_push_base.sh 1.0.0 yourusername
+# Build images, push to Docker Hub, and generate Helm values
+./scripts/k8s_deploy.sh
 
-# Then use *.hub Dockerfiles for 5x faster builds
-docker build -f docker/Dockerfile.stable_diffusion.hub -t ai_apis_sd:latest .
+# Deploy or upgrade
+helm upgrade --install ai-apis helm/ai-apis -n ai-apis -f my-values.yaml
 ```
 
-### Manual Installation
-
-First, install uv (fast Python package installer):
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Then install the package:
-```bash
-uv pip install -e ".[stable-diffusion,whisper,text-analysis,bot]"
-```
-
-Install only what you need:
-- Bot only: `uv pip install -e ".[bot]"`
-- SD only: `uv pip install -e ".[stable-diffusion]"`
-- Whisper only: `uv pip install -e ".[whisper]"`
-- Text analysis only: `uv pip install -e ".[text-analysis]"`
-
-## Configuration
-
-Required environment variables in `.env`:
+`scripts/k8s_deploy.sh` reads `.env`, builds all images, pushes them, and writes `my-values.yaml`. To regenerate values without rebuilding:
 
 ```bash
-# Authentication (supports comma-separated multiple keys)
-API_KEY=your-key-here
-ADMIN_API_KEY=your-admin-key
-
-# External Services
-HF_TOKEN=your-huggingface-token
-TELEGRAM_TOKEN=your-telegram-token  # For bot
-
-# MongoDB (optional)
-USE_MONGODB=true
-MONGO_ROOT_USER=admin
-MONGO_ROOT_PASSWORD=changeme
-
-# API Endpoints (for Docker, use service names)
-OLLAMA_HOST=localhost
-SD_HOST=localhost
-WHISPER_HOST=localhost
+./scripts/k8s_deploy.sh --values-only
 ```
 
-## API Usage
+## Authentication
 
-All APIs require `X-API-Key` header:
+Two modes — configure one in `.env`:
+
+| Mode | When to use | Config |
+|---|---|---|
+| Static API key | Local / simple deployments | `API_KEY=...` |
+| Keycloak OIDC | Kubernetes / multi-user | `KEYCLOAK_URL=...` + `KEYCLOAK_CLIENT_*` |
+
+With Keycloak, pass a Bearer token. For service-to-service calls (bot, Nextcloud sync) the Client Credentials flow is used automatically.
+
+All endpoints require either `X-API-Key: <key>` or `Authorization: Bearer <token>`.
+
+## Whisper API
+
+### Basic transcription
 
 ```python
 import requests
 
-headers = {"X-API-Key": "your-api-key-here"}
-
-# Stable Diffusion
-response = requests.post(
-    "http://localhost:1234/post_config",
-    headers=headers,
-    params={"prompt": "A beautiful landscape", "model_id": "stabilityai/stable-diffusion-2-1"}
-)
-
-# Whisper
 with open("audio.wav", "rb") as f:
-    response = requests.post(
-        "http://localhost:8080/transcribe",
-        headers=headers,
-        files={"file": f}
+    r = requests.post(
+        "http://localhost:8080/transcribe/",
+        headers={"X-API-Key": "your-key"},
+        files={"file": f},
+        params={"model_to_use": "turbo"},
     )
-
-# Text Classification
-response = requests.post(
-    "http://localhost:8000/predict_proba/",
-    headers=headers,
-    json={"texts": ["This is great!"], "model_name": "cardiffnlp/twitter-roberta-base-sentiment"}
-)
+print(r.json()["answer"])
 ```
 
-## Features
+### Transcription with speaker diarization
 
-- **GPU Memory Management**: Automatic model unloading after configurable timeout
-- **Multiple API Keys**: Support comma-separated keys in environment variables or MongoDB
-- **MongoDB Integration**: Optional persistent storage for API keys and bot settings
-- **Docker Support**: Full GPU support with NVIDIA runtime
-- **Modular Dependencies**: Install only what you need
-- **Comprehensive Testing**: Unit tests for all core modules and APIs
-- **CI/CD Pipeline**: Automated linting, testing, and Docker builds
+```python
+with open("meeting.mp3", "rb") as f:
+    r = requests.post(
+        "http://localhost:8080/transcribe_and_diarize/",
+        headers={"X-API-Key": "your-key"},
+        files={"file": f},
+        params={
+            "num_speakers": 2,        # or min_speakers + max_speakers
+            "model_to_use": "turbo",
+            "backend": "whisperx",    # "whisperx" (default) or "whisper" (legacy)
+            "align": True,            # phoneme alignment (disable if quality degrades)
+            "include_fillers": False, # retain ähm/uhm/erm fillers
+            "max_words_per_second": 6.0,  # hallucination filter (0 to disable)
+            "top_n_languages": 2,     # keep only N most common languages (0 to disable)
+        },
+    )
+for seg in r.json()["answer"]:
+    print(f"[{seg['START']:.1f}s] {seg['SPEAKER']}: {seg['TRANSCRIPTION']}")
+```
 
-## Requirements
+Response segments:
 
-- Python 3.12+
-- NVIDIA GPU with CUDA 13.0+ (for ML APIs)
-- Docker with NVIDIA runtime (for Docker deployment)
+```json
+[
+  {"SPEAKER": "SPEAKER_00", "START": 0.5, "DURATION": 4.2, "TRANSCRIPTION": "Hello, how are you?", "LANGUAGE": "en"},
+  {"SPEAKER": "SPEAKER_01", "START": 5.1, "DURATION": 3.8, "TRANSCRIPTION": "I'm doing well, thanks.", "LANGUAGE": "en"}
+]
+```
+
+#### Backend comparison
+
+| | `whisperx` (default) | `whisper` (legacy) |
+|---|---|---|
+| Approach | Full-audio batched transcription → align → diarize | Diarize first → transcribe each segment separately |
+| Hallucination risk | Low (full context) | Higher (isolated short segments) |
+| Speed | Faster | Slower |
+| Alignment | wav2vec2 phoneme alignment | None |
+
+#### Filename-encoded parameters (Nextcloud sync)
+
+Instead of passing parameters to the API, encode them in the filename — the sync job picks them up automatically:
+
+| Filename pattern | Effect |
+|---|---|
+| `interview_2.mp3` | 2 speakers |
+| `session_3spk.wav` | 3 speakers |
+| `meeting_2speakers.m4a` | 2 speakers |
+| `interview_fillers.mp3` | retain filler words |
+| `meeting_fillers_2.mp3` | fillers + 2 speakers |
+
+## Nextcloud Sync
+
+A Kubernetes CronJob that scans a Nextcloud folder for audio/video files, transcribes them, and uploads `.txt` and `.srt` outputs to a `transcriptions/` subfolder next to each source file.
+
+Configure in `.env`:
+
+```bash
+NEXTCLOUD_URL=https://cloud.example.com
+NEXTCLOUD_USER=user@example.com
+NEXTCLOUD_DAV_USER=internal_username   # if WebDAV path differs from login
+NEXTCLOUD_PASSWORD=...
+NEXTCLOUD_FOLDER=/Shared/transcription
+NUM_SPEAKERS=2                          # or MIN_SPEAKERS + MAX_SPEAKERS
+NEXTCLOUD_SCHEDULE=0 2 * * *           # daily at 02:00
+```
+
+Files that already have a transcript in `transcriptions/` are skipped. Speaker count and filler-word retention can be overridden per-file via filename encoding (see above).
+
+## Installation (local / development)
+
+```bash
+# Install all extras
+uv pip install -e ".[stable-diffusion,whisper,text-analysis,bot]"
+
+# Whisper only (includes WhisperX)
+uv pip install -e ".[whisper]"
+```
 
 ## Development
 
-### Running Tests
-
 ```bash
-# Install dev dependencies
 uv pip install -e ".[dev]"
-
-# Run all tests
 pytest
-
-# Run with coverage
-pytest --cov=src --cov-report=html
-
-# Run specific test file
-pytest tests/core/test_config.py -v
-
-# Run tests in parallel (faster)
-pytest -n auto
-```
-
-### Code Quality
-
-```bash
-# Format code
-black src/ tests/
-isort src/ tests/
-
-# Lint
+black src/ tests/ && isort src/ tests/
 ruff check src/ tests/
-
-# Type check
-mypy src/
 ```
-
-### CI/CD
-
-The project uses GitHub Actions for continuous integration:
-
-- **Lint & Type Check** (`lint.yml`): Runs on every push and PR
-  - Black formatting check
-  - isort import sorting
-  - Ruff linting
-  - MyPy type checking
-
-- **Tests** (`test.yml`): Runs on every push and PR
-  - Unit tests with pytest
-  - Coverage reporting
-  - Import validation
-
-- **Docker Build** (`docker.yml`): Builds and scans Docker images
-  - Multi-service builds
-  - Security scanning with Trivy
-  - Automatic push to GHCR on main branch
-
-All workflows run on Python 3.12 and include caching for faster builds.
-
-## Documentation
-
-- DOCKER.md - Complete Docker deployment guide
-- CRITIQUE.md - Code quality analysis
-- See CLAUDE.md for coding standards
 
 ## Project Structure
 
 ```
 src/
-├── core/              # Shared utilities (auth, config, buffer, bot)
+├── core/              # Auth, config, buffer base class
+├── audio/             # Whisper + WhisperX transcription & diarization
 ├── image_generation/  # Stable Diffusion API
-├── audio/             # Whisper transcription + diarization
 ├── text_analysis/     # Text classification
-└── examples/          # Usage examples
+└── nextcloud/         # Nextcloud sync job
+scripts/
+├── k8s_deploy.sh      # Build, push, generate Helm values
+└── build_and_push_base.sh
+helm/ai-apis/          # Helm chart for all services
+docker/                # Dockerfiles (*.hub = fast builds via pre-built base)
 ```
+
+## Requirements
+
+- Python 3.12+
+- NVIDIA GPU with CUDA (for ML APIs)
+- Docker with NVIDIA runtime (for local Docker deployment)
+- Kubernetes + Helm 3 + Longhorn storage (for k8s deployment)
