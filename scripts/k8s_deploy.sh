@@ -240,7 +240,7 @@ whisper:
   image: ai-apis-whisper
   port: 8080
   hfToken: "$(val "${HF_TOKEN}")"
-  cacheStorage: 200Gi
+  cacheStorage: 20Gi
   defaultModel: "$(val "${DEFAULT_WHISPER_MODEL:-turbo}")"
   ingress:
     host: "$(val "${WHISPER_INGRESS_HOST:-whisper.example.com}")"
