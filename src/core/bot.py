@@ -18,6 +18,7 @@ import requests
 from telegram import Update
 from telegram.ext import Application, CallbackContext, CommandHandler, MessageHandler, filters
 
+from src.core.auth import build_auth_headers
 from src.core.config import config
 from src.core.database import get_mongo_db
 
@@ -296,9 +297,8 @@ async def handle_text_prompt(prompt, update, context, settings):
         f"{SD_ENDPOINT}/post_config?"
         + "&".join([f"{k}={settings[k]}" for k in settings])
         + f"&prompt={prompt}"
-        + f"&api_key={config.API_KEY}"
     )
-    response = requests.post(url)
+    response = requests.post(url, headers=build_auth_headers())
     if response.status_code == 200:
         image_stream = BytesIO(response.content)
         image_stream.seek(0)
@@ -317,9 +317,8 @@ async def handle_photo_prompt(photo, prompt, update, context, settings):
         f"{SD_ENDPOINT}/post_config?"
         + f"prompt={prompt}&"
         + "&".join([f"{k}={settings[k]}" for k in settings])
-        + f"&api_key={config.API_KEY}"
     )
-    response = requests.post(url, files=files)
+    response = requests.post(url, files=files, headers=build_auth_headers())
     if response.status_code == 200:
         image_stream = BytesIO(response.content)
         image_stream.seek(0)
@@ -428,7 +427,7 @@ async def add_lora(update: Update, context: CallbackContext) -> None:
     if privileges == 2:
         if context.args:
             lora_name = " ".join(context.args)
-            response = requests.post(f"{SD_ENDPOINT}/add_new_lora?name={lora_name}&api_key={config.ADMIN_API_KEY}")
+            response = requests.post(f"{SD_ENDPOINT}/add_new_lora?name={lora_name}", headers=build_auth_headers(config.ADMIN_API_KEY))
             if response.ok:
                 await update.message.reply_text(
                     f"LORA model '{lora_name}' added successfully."
@@ -459,7 +458,7 @@ async def get_loras(update: Update, context: CallbackContext) -> None:
     """Fetch and display available LORA models."""
     privileges = await check_privileges(update)
     if privileges:
-        response = requests.get(f"{SD_ENDPOINT}/get_available_loras?api_key={config.API_KEY}")
+        response = requests.get(f"{SD_ENDPOINT}/get_available_loras", headers=build_auth_headers())
         if response.status_code == 200:
             loras = response.json()
             loras_text = "Available LORAs:\n"
@@ -479,7 +478,7 @@ async def get_sd(update: Update, context: CallbackContext) -> None:
     """Fetch and display available Stable Diffusion models."""
     privileges = await check_privileges(update)
     if privileges:
-        response = requests.get(f"{SD_ENDPOINT}/get_available_stable_diffs?api_key={config.API_KEY}")
+        response = requests.get(f"{SD_ENDPOINT}/get_available_stable_diffs", headers=build_auth_headers())
         if response.status_code == 200:
             sd_models = response.json()
             sd_text = "Available Stable Diffusion Models:\n" + "\n".join(sd_models.values())
@@ -810,7 +809,7 @@ async def diarize_command(update: Update, context: CallbackContext) -> None:
         tmp_path = tmp.name
 
     try:
-        params: dict = {"model_to_use": "turbo", "api_key": config.API_KEY}
+        params: dict = {"model_to_use": "turbo"}
         if num_speakers is not None:
             params["num_speakers"] = num_speakers
         else:
@@ -821,7 +820,12 @@ async def diarize_command(update: Update, context: CallbackContext) -> None:
 
         def _post() -> requests.Response:
             with open(tmp_path, "rb") as audio_file:
-                return requests.post(url, params=params, files={"file": (tmp_path, audio_file, mime)})
+                return requests.post(
+                    url,
+                    params=params,
+                    files={"file": (tmp_path, audio_file, mime)},
+                    headers=build_auth_headers(),
+                )
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, _post)
@@ -864,8 +868,8 @@ async def audio_transcription(update: Update, context: CallbackContext, sound) -
             ) as tmp:
                 tmp.write(audio_bytes)
                 files = {"file": (tmp.name, open(tmp.name, "rb"), sound.mime_type)}
-                url = f"{WHISPER_ENDPOINT}/transcribe?model_to_use=turbo&api_key={config.API_KEY}"
-                response = requests.post(url, files=files)
+                url = f"{WHISPER_ENDPOINT}/transcribe?model_to_use=turbo"
+                response = requests.post(url, files=files, headers=build_auth_headers())
 
                 transcription = json.loads(response.text)["answer"]
 

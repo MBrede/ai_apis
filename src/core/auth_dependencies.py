@@ -1,43 +1,23 @@
+"""FastAPI authentication dependencies.
+
+Kept separate from auth.py so that auth.py can be imported by non-FastAPI
+containers (e.g. nextcloud sync) without requiring fastapi to be installed.
 """
-FastAPI authentication dependencies.
 
-This module provides FastAPI-compatible authentication dependencies.
-Separated from core auth to avoid requiring FastAPI for non-API uses.
-"""
+from fastapi import Request
 
-from src.core.auth import _verify_admin_key_impl, _verify_api_key_impl, get_api_key_header
+from src.core.auth import _verify_admin_key_impl, _verify_api_key_impl
 
 
-def create_api_key_dependency():
-    """
-    Create a FastAPI dependency for API key verification.
-
-    Returns:
-        Async function that can be used with Depends()
-    """
-    from fastapi import Security
-
-    async def verify_key(api_key: str | None = Security(get_api_key_header())) -> str:
-        return await _verify_api_key_impl(api_key)
-
-    return verify_key
+async def verify_api_key(request: Request, api_key: str | None = None) -> str:
+    """FastAPI dependency — verifies JWT Bearer token or X-API-Key header."""
+    return await _verify_api_key_impl(
+        api_key, authorization=request.headers.get("Authorization")
+    )
 
 
-def create_admin_key_dependency():
-    """
-    Create a FastAPI dependency for admin key verification.
-
-    Returns:
-        Async function that can be used with Depends()
-    """
-    from fastapi import Security
-
-    async def verify_admin(api_key: str | None = Security(get_api_key_header())) -> str:
-        return await _verify_admin_key_impl(api_key)
-
-    return verify_admin
-
-
-# Create default instances for backwards compatibility
-verify_api_key = create_api_key_dependency()
-verify_admin_key = create_admin_key_dependency()
+async def verify_admin_key(request: Request, api_key: str | None = None) -> str:
+    """FastAPI dependency — verifies admin JWT role or admin X-API-Key header."""
+    return await _verify_admin_key_impl(
+        api_key, authorization=request.headers.get("Authorization")
+    )

@@ -3,8 +3,10 @@ from datetime import datetime
 import torch
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
+from src.core.app_factory import create_app
 from fastapi.responses import JSONResponse
 from huggingface_hub import hf_api
+
 from setfit import SetFitModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
@@ -90,13 +92,13 @@ class ClassificationBuffer(Model_Buffer):
 # Create global buffer instance
 classification_buffer = ClassificationBuffer()
 
-app = FastAPI()
+app = create_app()
 router = APIRouter()
 
 from fastapi import Depends
 from pydantic import BaseModel
 
-from src.core.auth import verify_api_key
+from src.core.auth_dependencies import verify_api_key
 
 
 class Text_Request(BaseModel):

@@ -1,0 +1,61 @@
+{{- if .Values.keda.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-text-classification-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.textClassification.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "ai-apis.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-text-classification
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+{{- else }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-text-classification
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.textClassification.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "ai-apis.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: text-classification
+{{- end }}

@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-bot
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telegram-bot
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai-apis.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: telegram-bot
+  template:
+    metadata:
+      labels:
+        {{- include "ai-apis.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: telegram-bot
+    spec:
+      # The Telegram bot uses long-polling — it makes outbound HTTPS connections
+      # to api.telegram.org and does not require an ingress or a GPU.
+      containers:
+        - name: telegram-bot
+          image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.telegramBot.image) }}
+          imagePullPolicy: Always
+          env:
+            - name: TELEGRAM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: telegramToken
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: apiKey
+            - name: OLLAMA_HOST
+              value: {{ .Values.telegramBot.ollamaHost | quote }}
+            - name: OLLAMA_PORT
+              value: {{ .Values.telegramBot.ollamaPort | quote }}
+            # When KEDA is enabled, SD and Whisper are scaled to zero and fronted by
+            # the KEDA HTTP interceptor which listens on port 8080. The interceptor
+            # routes by Host header, so the bot must call via the ingress hostname
+            # (through nginx) rather than the internal service name — otherwise the
+            # port mismatch (app port ≠ 8080) prevents KEDA from triggering scale-up.
+            {{- if .Values.keda.enabled }}
+            {{- /* When KEDA is enabled, services are ExternalName → interceptor on 8080.
+                   Use the k8s service name (in-cluster DNS) so the bot doesn't need
+                   to reach an external IP via nip.io (hairpin NAT not available). */}}
+            - name: SD_HOST
+              value: {{ printf "%s-stable-diffusion" .Release.Name | quote }}
+            - name: SD_PORT
+              value: "8080"
+            - name: WHISPER_HOST
+              value: {{ printf "%s-whisper" .Release.Name | quote }}
+            - name: WHISPER_PORT
+              value: "8080"
+            - name: TEXT_CLASSIFICATION_HOST
+              value: {{ printf "%s-text-classification" .Release.Name | quote }}
+            - name: TEXT_CLASSIFICATION_PORT
+              value: "8080"
+            {{- else }}
+            - name: SD_HOST
+              value: {{ printf "%s-stable-diffusion" .Release.Name | quote }}
+            - name: SD_PORT
+              value: {{ .Values.stableDiffusion.port | quote }}
+            - name: WHISPER_HOST
+              value: {{ printf "%s-whisper" .Release.Name | quote }}
+            - name: WHISPER_PORT
+              value: {{ .Values.whisper.port | quote }}
+            - name: TEXT_CLASSIFICATION_HOST
+              value: {{ printf "%s-text-classification" .Release.Name | quote }}
+            - name: TEXT_CLASSIFICATION_PORT
+              value: {{ .Values.textClassification.port | quote }}
+            {{- end }}
+            - name: USE_MONGODB
+              value: {{ .Values.global.useMongodb | quote }}
+            - name: MONGODB_DB
+              value: {{ .Values.mongodb.database | quote }}
+            # MONGO_USER and MONGO_PASSWORD must appear before MONGODB_URL
+            # so that the $(VAR) substitution in MONGODB_URL resolves correctly.
+            - name: MONGO_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: mongoRootUser
+            - name: MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-apis-secrets
+                  key: mongoRootPassword
+            - name: MONGODB_URL
+              value: {{ include "ai-apis.mongodbUrl" . | quote }}
+            {{- include "ai-apis.keycloakEnv" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

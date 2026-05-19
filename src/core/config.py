@@ -64,6 +64,32 @@ class APIConfig:
     ADMIN_API_KEY: str | None = os.getenv("ADMIN_API_KEY")
 
     # =============================================================================
+    # Keycloak / OIDC Authentication (optional)
+    # When KEYCLOAK_URL is set, Bearer JWT tokens are accepted in addition to
+    # (and preferred over) plain API keys.
+    # =============================================================================
+
+    # Base URL of the Keycloak server, e.g. https://keycloak.example.com
+    # Leave unset to disable Keycloak and use API key auth only.
+    KEYCLOAK_URL: str | None = os.getenv("KEYCLOAK_URL")
+
+    # Realm name inside Keycloak
+    KEYCLOAK_REALM: str = os.getenv("KEYCLOAK_REALM", "master")
+
+    # Client ID registered in Keycloak (used for audience validation + CC flow)
+    KEYCLOAK_CLIENT_ID: str | None = os.getenv("KEYCLOAK_CLIENT_ID")
+
+    # Client secret for the Client Credentials flow (bot / sync service account)
+    KEYCLOAK_CLIENT_SECRET: str | None = os.getenv("KEYCLOAK_CLIENT_SECRET")
+
+    # Realm role that grants admin access (checked in verify_admin_key)
+    KEYCLOAK_ADMIN_ROLE: str = os.getenv("KEYCLOAK_ADMIN_ROLE", "ai-apis-admin")
+
+    # Set to False to disable SSL verification for self-signed certs.
+    # WARNING: only use in private networks — never in production over the internet.
+    KEYCLOAK_VERIFY_SSL: bool = os.getenv("KEYCLOAK_VERIFY_SSL", "True").lower() != "false"
+
+    # =============================================================================
     # MongoDB Configuration
     # =============================================================================
 

@@ -28,12 +28,13 @@ from diffusers import (
     StableDiffusion3Pipeline
 )
 from fastapi import APIRouter, Depends, FastAPI, File, Response, UploadFile
+from src.core.app_factory import create_app
 from fastapi.responses import JSONResponse
 from PIL import Image
 from pydantic import BaseModel
 from tqdm import tqdm
 
-from src.core.auth import verify_admin_key, verify_api_key
+from src.core.auth_dependencies import verify_admin_key, verify_api_key
 from src.core.buffer_class import Model_Buffer
 from src.core.config import config
 
@@ -387,7 +388,7 @@ model = DiffusionModel()
 model_config = ["torch_dtype"]
 prompt_config = ["num_inference_steps", "guidance_scale", "negative_prompt"]
 
-app = FastAPI()
+app = create_app()
 router = APIRouter()
 
 

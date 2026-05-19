@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-mongodb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ClusterIP
+  # A headless service is also created implicitly by the StatefulSet serviceName.
+  # This named ClusterIP service allows other pods to reach MongoDB by a stable
+  # DNS name without needing to know the pod ordinal.
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+      protocol: TCP
+  selector:
+    {{- include "ai-apis.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb

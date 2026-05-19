@@ -1,0 +1,81 @@
+{
+  "realm": "ai-apis",
+  "enabled": true,
+  "displayName": "AI APIs",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      {
+        "name": "ai-apis-user",
+        "description": "Standard access to AI API endpoints"
+      },
+      {
+        "name": "ai-apis-admin",
+        "description": "Admin access — required for privileged operations (add_lora, etc.)"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ai-apis",
+      "name": "AI APIs service client",
+      "description": "Used by the Telegram bot and Nextcloud sync via Client Credentials flow",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "CHANGE_ME",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "bearerOnly": false,
+      "protocol": "openid-connect",
+      "defaultClientScopes": [
+        "web-origins",
+        "roles",
+        "profile",
+        "email"
+      ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-ai-apis",
+      "enabled": true,
+      "serviceAccountClientId": "ai-apis",
+      "realmRoles": [
+        "ai-apis-user",
+        "ai-apis-admin"
+      ]
+    }
+  ],
+  "_comment_post_import": [
+    "After importing this realm:",
+    "1. Clients → ai-apis → Credentials → regenerate secret, update KEYCLOAK_CLIENT_SECRET in .env",
+    "2. Clients → ai-apis → Service account roles → verify 'ai-apis-user' is listed",
+    "   (the users block above is sometimes ignored by Keycloak on import)",
+    "3. To give the bot admin access: add 'ai-apis-admin' to the service account roles",
+    "   OR leave it out and keep ADMIN_API_KEY as the fallback for admin endpoints"
+  ]
+}
