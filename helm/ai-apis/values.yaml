@@ -248,6 +248,7 @@ nextcloudLlmSync:
   # Default model used when a sidecar omits `llm:`
   llmDefaultModel: "glm-4-7-flash"
 
-  # Timeout in seconds for a single LLM request (generous to absorb
-  # KubeAI scale-from-zero cold starts)
-  llmTimeout: "300"
+  # Timeout in seconds for a single LLM request. Cold model spin-up
+  # (weights not yet on the KubeAI cache PVC) can take up to ~12 minutes,
+  # not just the 30-60s of a warm cold-start — kept well above that.
+  llmTimeout: "900"

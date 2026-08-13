@@ -268,7 +268,10 @@ async def _call_llm(session: aiohttp.ClientSession, model: str, prompt: str) -> 
             data = json.loads(await resp.read())
             return data["choices"][0]["message"]["content"]
     except Exception as exc:
-        logger.error("Error calling LLM: %s", exc)
+        # asyncio.TimeoutError (and a few other exceptions) have an empty
+        # str() — include the type name so timeouts are distinguishable
+        # from other failures in the logs.
+        logger.error("Error calling LLM: %s: %s", type(exc).__name__, exc)
         return None
 
 
@@ -295,7 +298,7 @@ async def main() -> None:
         logger.info("Found %d LLM job(s) to run.", len(jobs))
 
         prompt_cache: dict[str, str] = {}
-        timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "300")))
+        timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for job in tqdm(jobs, desc="Processing"):
                 try:

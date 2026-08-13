@@ -296,7 +296,7 @@ nextcloudLlmSync:
   nextcloudFolder: "$(val "${NEXTCLOUD_LLM_FOLDER:-}")"
   llmUrl: "$(val "${LLM_URL:-http://kubeai.llm.svc.cluster.local/openai/v1}")"
   llmDefaultModel: "$(val "${LLM_DEFAULT_MODEL:-glm-4-7-flash}")"
-  llmTimeout: "$(val "${LLM_TIMEOUT:-300}")"
+  llmTimeout: "$(val "${LLM_TIMEOUT:-900}")"
 YAML
 
 echo "Done. To deploy:"

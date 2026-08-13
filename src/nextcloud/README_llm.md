@@ -65,9 +65,12 @@ for the live set of enabled models before relying on this table.
 
 Models scale to zero when idle (`minReplicas: 0`). Unlike the Whisper
 service (which needs a KEDA warm-up step to avoid 502s), KubeAI's own proxy
-queues requests during scale-up natively — no warm-up is needed here, but
-the **first request after idle can take 30–60s** while the model loads.
-`LLM_TIMEOUT` (default 300s) is set generously to absorb this.
+queues requests during scale-up natively — no warm-up is needed here. A warm
+cold-start (weights already on KubeAI's cache PVC) takes ~30–60s, but a true
+cold pull (first-ever invocation of that model, weights not cached yet) can
+take **up to ~12 minutes** — confirmed in testing: the first `glm-4-7-flash`
+call timed out at the old 300s default. `LLM_TIMEOUT` (default 900s) is set
+well above that.
 
 ## Prompts folder
 
@@ -139,7 +142,7 @@ LLM_URL=http://kubeai.llm.svc.cluster.local/openai/v1
 LLM_DEFAULT_MODEL=glm-4-7-flash
 
 # Request timeout in seconds (generous to absorb cold-start queueing)
-LLM_TIMEOUT=300
+LLM_TIMEOUT=900
 ```
 
 ## Running
