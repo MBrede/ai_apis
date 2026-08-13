@@ -224,3 +224,30 @@ nextcloudSync:
 
   # Timeout in seconds for a single Whisper transcription request
   whisperTimeout: "3600"
+
+# ============================================================
+# Nextcloud LLM post-processing (Kubernetes CronJob)
+# Independent of nextcloudSync above — never transcribes, only runs a
+# hosted KubeAI LLM over transcripts nextcloudSync already produced, when a
+# `<stem>.yaml` sidecar sits next to the source audio. See
+# ai_apis/src/nextcloud/README_llm.md.
+# ============================================================
+nextcloudLlmSync:
+  # Cron schedule for the LLM sync job
+  schedule: "0 4 * * *"
+
+  # Remote Nextcloud folder to scan for sidecars.
+  # Leave empty to reuse nextcloudSync.nextcloudFolder (the same tree the
+  # whisper job scans) — override only to watch a different/subset folder.
+  nextcloudFolder: ""
+
+  # In-cluster KubeAI OpenAI-compatible endpoint. No auth needed — KubeAI
+  # does not check the API key on internal (same-cluster) calls.
+  llmUrl: "http://kubeai.llm.svc.cluster.local/openai/v1"
+
+  # Default model used when a sidecar omits `llm:`
+  llmDefaultModel: "glm-4-7-flash"
+
+  # Timeout in seconds for a single LLM request (generous to absorb
+  # KubeAI scale-from-zero cold starts)
+  llmTimeout: "300"

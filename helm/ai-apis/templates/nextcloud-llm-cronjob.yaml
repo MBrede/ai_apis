@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-nextcloud-llm-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nextcloud-llm-sync
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  schedule: {{ .Values.nextcloudLlmSync.schedule | quote }}
+  # Keep the last 3 successful job pods for log inspection
+  successfulJobsHistoryLimit: 3
+  # Keep the last failed job pod for debugging
+  failedJobsHistoryLimit: 1
+  # Prevent overlapping runs if a previous job is still executing
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "ai-apis.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: nextcloud-llm-sync
+        spec:
+          # No GPU, no Whisper dependency — this job only calls the LLM
+          # for transcripts the whisper job has already produced.
+          restartPolicy: OnFailure
+          containers:
+            - name: nextcloud-llm-sync
+              image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.nextcloudSync.image) }}
+              imagePullPolicy: Always
+              command: ["python", "-m", "src.nextcloud.sync_llm"]
+              env:
+                - name: NEXTCLOUD_URL
+                  value: {{ .Values.nextcloudSync.nextcloudUrl | quote }}
+                - name: NEXTCLOUD_USER
+                  value: {{ .Values.nextcloudSync.nextcloudUser | quote }}
+                {{- if .Values.nextcloudSync.nextcloudDavUser }}
+                - name: NEXTCLOUD_DAV_USER
+                  value: {{ .Values.nextcloudSync.nextcloudDavUser | quote }}
+                {{- end }}
+                - name: NEXTCLOUD_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ai-apis-secrets
+                      key: nextcloudPassword
+                # Defaults to the same folder tree the whisper job scans —
+                # override only if the LLM job should watch a subset of it.
+                - name: NEXTCLOUD_FOLDER
+                  value: {{ .Values.nextcloudLlmSync.nextcloudFolder | default .Values.nextcloudSync.nextcloudFolder | quote }}
+                # In-cluster KubeAI endpoint — no auth needed, KubeAI does
+                # not check the API key on internal calls.
+                - name: LLM_URL
+                  value: {{ .Values.nextcloudLlmSync.llmUrl | quote }}
+                - name: LLM_DEFAULT_MODEL
+                  value: {{ .Values.nextcloudLlmSync.llmDefaultModel | quote }}
+                - name: LLM_TIMEOUT
+                  value: {{ .Values.nextcloudLlmSync.llmTimeout | quote }}
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
