@@ -5,6 +5,7 @@ To start the API:
     gunicorn stable_diffusion_api:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:1234
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -461,7 +462,11 @@ async def get_image(
             cfg["image"] = await image.read()
         except AttributeError:
             pass
-    image = image_grid(model.gen_image(prompt, cfg))
+    # gen_image blocks on GPU inference and (on a cold model) a synchronous multi-GB
+    # download — run it off the event loop so /health keeps responding and the
+    # liveness probe doesn't kill the pod mid-download (see landing_setup.md).
+    images = await asyncio.to_thread(model.gen_image, prompt, cfg)
+    image = image_grid(images)
     image = get_bytes_value(image)
     return Response(content=image, media_type="image/png")
 

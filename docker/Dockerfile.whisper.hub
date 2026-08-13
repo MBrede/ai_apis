@@ -13,7 +13,7 @@ WORKDIR /app
 # Install only service-specific packages (base already has api-core and ml-base)
 # This installs: openai-whisper, pyannote-audio, ffmpeg-python
 COPY pyproject.toml README.md /app/
-RUN uv pip install -e "/app[whisper-only]"
+RUN UV_HTTP_TIMEOUT=300 uv pip install -e "/app[whisper-only]"
 
 # Copy source code
 COPY src/core/ /app/src/core/
