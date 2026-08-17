@@ -2,14 +2,22 @@
 # Global settings shared across all services
 # ============================================================
 global:
-  # Docker Hub registry base URL
+  # Container registry base URL. Docker Hub (docker.io) or the cluster's
+  # private registry (registry.149.222.209.65.nip.io) — see registry_setup.md.
   imageRegistry: docker.io
 
-  # Docker Hub username / organisation — REQUIRED before deploying
+  # Docker Hub username/org, or a namespace prefix under the private
+  # registry (e.g. "ai-apis") — REQUIRED before deploying
   imageRepository: ""
 
   # Default image tag applied to all service images
   imageTag: latest
+
+  # Name of a docker-registry Secret (already created in this namespace)
+  # to use as an imagePullSecret on every pod. Required when imageRegistry
+  # points at the private registry (auth-gated even for pulls, see
+  # registry_setup.md). Leave empty for Docker Hub public images.
+  imagePullSecret: ""
 
   # Longhorn is used as the default storage class for all PVCs
   storageClass: longhorn

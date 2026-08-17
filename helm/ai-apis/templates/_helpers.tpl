@@ -67,6 +67,21 @@ Usage:
 {{- end }}
 
 {{/*
+imagePullSecrets block for pod specs — only rendered when
+global.imagePullSecret is set (e.g. pulling from the private registry,
+which requires auth). Left unset, Docker Hub public images pull with no
+secret, same as before this existed.
+Usage:
+  {{- include "ai-apis.imagePullSecrets" . | nindent 10 }}
+*/}}
+{{- define "ai-apis.imagePullSecrets" -}}
+{{- if .Values.global.imagePullSecret }}
+imagePullSecrets:
+  - name: {{ .Values.global.imagePullSecret }}
+{{- end }}
+{{- end }}
+
+{{/*
 Node selector that schedules a pod onto a node with an NVIDIA GPU.
 */}}
 {{- define "ai-apis.gpuNodeSelector" -}}

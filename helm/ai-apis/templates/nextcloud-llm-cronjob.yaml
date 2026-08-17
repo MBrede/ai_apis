@@ -25,6 +25,7 @@ spec:
             {{- include "ai-apis.selectorLabels" . | nindent 12 }}
             app.kubernetes.io/component: nextcloud-llm-sync
         spec:
+          {{- include "ai-apis.imagePullSecrets" . | nindent 10 }}
           # No GPU, no Whisper dependency — this job only calls the LLM
           # for transcripts the whisper job has already produced.
           restartPolicy: OnFailure

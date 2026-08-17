@@ -25,6 +25,7 @@ spec:
             {{- include "ai-apis.selectorLabels" . | nindent 12 }}
             app.kubernetes.io/component: nextcloud-sync
         spec:
+          {{- include "ai-apis.imagePullSecrets" . | nindent 10 }}
           # No GPU is needed for the sync job — it only calls the Whisper API
           restartPolicy: OnFailure
           initContainers:

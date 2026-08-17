@@ -20,6 +20,7 @@ spec:
         {{- include "ai-apis.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: telegram-bot
     spec:
+      {{- include "ai-apis.imagePullSecrets" . | nindent 6 }}
       # The Telegram bot uses long-polling — it makes outbound HTTPS connections
       # to api.telegram.org and does not require an ingress or a GPU.
       containers:
