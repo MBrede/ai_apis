@@ -321,7 +321,10 @@ def _patched_initial_prompt(pipeline, prompt: str | None):
         pipeline.options = original
 
 
-app = create_app()
+app = create_app(
+    title="Whisper Transcription API",
+    description="Speech-to-text with speaker diarization.",
+)
 router = APIRouter()
 
 

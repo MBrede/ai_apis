@@ -92,7 +92,10 @@ class ClassificationBuffer(Model_Buffer):
 # Create global buffer instance
 classification_buffer = ClassificationBuffer()
 
-app = create_app()
+app = create_app(
+    title="Text Classification API",
+    description="Sentiment analysis and text classification.",
+)
 router = APIRouter()
 
 from fastapi import Depends

@@ -389,7 +389,10 @@ model = DiffusionModel()
 model_config = ["torch_dtype"]
 prompt_config = ["num_inference_steps", "guidance_scale", "negative_prompt"]
 
-app = create_app()
+app = create_app(
+    title="Stable Diffusion API",
+    description="Image generation with LORA support.",
+)
 router = APIRouter()
 
 

@@ -1,9 +1,32 @@
 """FastAPI app factory with Keycloak OAuth2 wired into Swagger UI."""
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2AuthorizationCodeBearer
 
 from src.core.config import config
+
+_LANDING_PAGE_TEMPLATE = """<!doctype html>
+<html>
+<head>
+<title>{title}</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #1a1a1a; }}
+  h1 {{ margin-bottom: 0.25rem; }}
+  p.description {{ color: #555; }}
+  ul {{ line-height: 1.9; }}
+</style>
+</head>
+<body>
+  <h1>{title}</h1>
+  <p class="description">{description}</p>
+  <ul>
+    <li><a href="/docs">API docs (Swagger UI)</a></li>
+    <li><a href="/health">Health check</a></li>
+  </ul>
+</body>
+</html>
+"""
 
 
 def create_app(**kwargs) -> FastAPI:
@@ -79,5 +102,12 @@ def create_app(**kwargs) -> FastAPI:
             return schema
 
         app.openapi = custom_openapi
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def landing_page() -> str:
+        return _LANDING_PAGE_TEMPLATE.format(
+            title=app.title,
+            description=app.description or "",
+        )
 
     return app
