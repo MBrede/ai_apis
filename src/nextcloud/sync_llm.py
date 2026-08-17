@@ -266,7 +266,13 @@ async def _call_llm(session: aiohttp.ClientSession, model: str, prompt: str) -> 
                 logger.error("LLM request failed (HTTP %s): %s", resp.status, body)
                 return None
             data = json.loads(await resp.read())
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            # Reasoning models (e.g. glm-4-7-flash) can emit their chain-of-thought
+            # inline as `<think>...</think>` instead of a separate reasoning_content
+            # field, depending on vLLM's reasoning-parser config. Strip it.
+            if "</think>" in content:
+                content = content.rsplit("</think>", 1)[1]
+            return content.strip()
     except Exception as exc:
         # asyncio.TimeoutError (and a few other exceptions) have an empty
         # str() — include the type name so timeouts are distinguishable
