@@ -50,8 +50,10 @@ spec:
                       key: nextcloudPassword
                 # Defaults to the same folder tree the whisper job scans —
                 # override only if the LLM job should watch a subset of it.
+                {{- $folders := .Values.nextcloudLlmSync.nextcloudFolders | default list }}
+                {{- if not $folders }}{{ $folders = .Values.nextcloudSync.nextcloudFolders }}{{ end }}
                 - name: NEXTCLOUD_FOLDER
-                  value: {{ .Values.nextcloudLlmSync.nextcloudFolder | default .Values.nextcloudSync.nextcloudFolder | quote }}
+                  value: {{ $folders | join "," | quote }}
                 # In-cluster KubeAI endpoint — no auth needed, KubeAI does
                 # not check the API key on internal calls.
                 - name: LLM_URL

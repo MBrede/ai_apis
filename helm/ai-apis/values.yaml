@@ -200,8 +200,10 @@ nextcloudSync:
   # Docker image name (without registry/repository prefix)
   image: ai-apis-nextcloud
 
-  # Cron schedule for the sync job (default: every day at 02:00)
-  schedule: "0 2 * * *"
+  # Cron schedule for the sync job. Every 30min is safe here — sync_llm.py
+  # and the whisper sync are both incremental (skip files already processed,
+  # via sidecar/mtime tracking), so a no-op run just exits fast and cheap.
+  schedule: "*/30 * * * *"
 
   # Base URL of the Nextcloud instance (e.g. https://nextcloud.example.com)
   nextcloudUrl: ""
@@ -218,8 +220,11 @@ nextcloudSync:
   # Nextcloud password — stored in the shared Secret
   nextcloudPassword: ""
 
-  # Remote Nextcloud folder path to scan for audio/video files
-  nextcloudFolder: ""
+  # Remote Nextcloud folder path(s) to scan for audio/video files. List —
+  # most deployments only need one entry. Rendered into a comma-separated
+  # NEXTCLOUD_FOLDER env var; sync.py splits it back into a list.
+  nextcloudFolders:
+    - ""
 
   # Fixed number of speakers for diarization (leave empty for auto-detection)
   numSpeakers: ""
@@ -241,13 +246,16 @@ nextcloudSync:
 # ai_apis/src/nextcloud/README_llm.md.
 # ============================================================
 nextcloudLlmSync:
-  # Cron schedule for the LLM sync job
-  schedule: "0 4 * * *"
+  # Cron schedule for the LLM sync job. Every 30min is safe — skips any
+  # sidecar whose output already exists (see sync_llm.py), so a no-op run
+  # just exits fast and cheap. Same reasoning as nextcloudSync.schedule above.
+  schedule: "*/30 * * * *"
 
-  # Remote Nextcloud folder to scan for sidecars.
-  # Leave empty to reuse nextcloudSync.nextcloudFolder (the same tree the
-  # whisper job scans) — override only to watch a different/subset folder.
-  nextcloudFolder: ""
+  # Remote Nextcloud folder(s) to scan for sidecars. List.
+  # Leave empty (`[]`) to reuse nextcloudSync.nextcloudFolders (the same
+  # tree the whisper job scans) — override only to watch a different/subset
+  # set of folders.
+  nextcloudFolders: []
 
   # In-cluster KubeAI OpenAI-compatible endpoint. No auth needed — KubeAI
   # does not check the API key on internal (same-cluster) calls.

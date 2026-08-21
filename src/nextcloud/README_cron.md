@@ -1,9 +1,22 @@
 # Nextcloud Transcription Sync
 
-Scans a Nextcloud folder (recursively) once a day for new audio/video files,
-transcribes them with speaker diarization via the local Whisper API, and
-uploads `.txt` and `.srt` outputs to a `transcriptions/` subfolder next to
-each source file. Already-transcribed files are skipped.
+Scans one or more Nextcloud folders (recursively) — every 30 minutes by
+default (Kubernetes; changed 2026-08-19, was daily) — for new audio/video
+files, transcribes them with speaker diarization via the local Whisper API,
+and uploads `.txt` and `.srt` outputs to a `transcriptions/` subfolder next
+to each source file. Already-transcribed files are skipped, so a run with
+nothing new to do is cheap — the shorter interval isn't extra load.
+
+By default every file is transcribed once with the `WHISPER_MODEL` env
+default. A `<stem>.yaml`/`.yml` sidecar next to the audio file can opt a
+file into **multiple STT models** via an `stt:` field (single model name or
+a list) — one independent transcription pass per listed model, each with
+its own `<stem>_<model>.{txt,srt}` output and skip tracking. This is the
+same sidecar file the LLM post-processing job (`sync_llm.py`) uses for its
+own `llm:`/`prompt:`/`context:` fields — see `README_llm.md` for the full
+schema and a worked multi-model example. Files with no sidecar, or a
+sidecar with no `stt:` field, are completely unaffected by this — they keep
+today's exact unsuffixed behavior.
 
 ## Environment variables
 
@@ -17,6 +30,8 @@ NEXTCLOUD_URL=https://cloud.example.com
 NEXTCLOUD_USER=myuser
 NEXTCLOUD_PASSWORD=mypassword
 NEXTCLOUD_FOLDER=path/to/folder   # relative to your Nextcloud home
+# Comma-separated for multiple folders, each scanned independently:
+# NEXTCLOUD_FOLDER=path/to/folder,/Shared/other-project/transcription
 
 # Speaker count — three options in priority order:
 # 1. Encode in the filename (see below) — overrides env vars per file
@@ -91,6 +106,17 @@ Nextcloud folder/
     └── interview_01.srt    # subtitle file (importable into video editors)
 ```
 
+With a sidecar `stt: [turbo, qwen3-asr-1.7b]` next to `interview_01.mp3`,
+output is suffixed per model instead:
+
+```
+transcriptions/
+├── interview_01_turbo.txt
+├── interview_01_turbo.srt
+├── interview_01_qwen3-asr-1.7b.txt
+└── interview_01_qwen3-asr-1.7b.srt
+```
+
 `.txt` format:
 ```
 [0:00:00 - 0:00:08] SPEAKER_00: Hello, welcome to the interview.
@@ -119,6 +145,15 @@ The Kubernetes CronJob includes an **init container** (`warm-whisper`) that:
 2. Exits once it receives any response other than 502
 3. Waits an additional 30 s for the model to fully load into GPU memory
 
+**Known risk with the `qwen3-asr` backend**: `/health` reports whether each
+buffer is *accessible*, not whether a specific backend's model is *loaded* —
+the fixed 30 s wait was sized for Whisper/WhisperX's typical load time. A
+cold Qwen3-ASR load (first request after the pod starts, or after its own
+idle-unload timeout) may take longer than 30 s, in which case the sync job's
+first `qwen3-asr` request could still race a cold buffer. Not yet fixed —
+increase the init container's sleep, or make `/health` report per-backend
+model-loaded state, if this turns out to be a real problem in practice.
+
 The main sync container only starts after the init container completes,
 guaranteeing Whisper is ready to accept requests. No GPU is held permanently.
 
@@ -129,7 +164,7 @@ This does not apply to the Docker Compose setup (Whisper runs persistently there
 **Kubernetes:** The schedule is set via `.env` / `my-values.yaml`:
 
 ```bash
-NEXTCLOUD_SCHEDULE=0 2 * * *   # daily at 02:00
+NEXTCLOUD_SCHEDULE=*/30 * * * *   # every 30 min (chart default since 2026-08-19; was 0 2 * * * / daily)
 ```
 
 The value is passed directly to the Kubernetes CronJob — no image rebuild needed. Apply with:

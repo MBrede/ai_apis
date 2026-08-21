@@ -64,7 +64,7 @@ spec:
                       name: ai-apis-secrets
                       key: nextcloudPassword
                 - name: NEXTCLOUD_FOLDER
-                  value: {{ .Values.nextcloudSync.nextcloudFolder | quote }}
+                  value: {{ .Values.nextcloudSync.nextcloudFolders | join "," | quote }}
                 # Construct the full Whisper service URL from the release name and port
                 - name: WHISPER_URL
                   value: {{ printf "http://%s-whisper:%v" .Release.Name .Values.whisper.port | quote }}

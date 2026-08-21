@@ -14,6 +14,15 @@
 #                          built-in ignore list below)
 #   -h, --help             Show this help
 #
+# Registry (.env vars, all optional — default is Docker Hub):
+#   IMAGE_REGISTRY      Registry base URL (default: docker.io). Set to
+#                        registry.149.222.209.65.nip.io for the cluster's
+#                        private registry — see registry_setup.md.
+#   IMAGE_REPOSITORY    Repo/namespace prefix (default: DOCKER_HUB_USER)
+#   IMAGE_PULL_SECRET   Name of a docker-registry Secret already created in
+#                        the target namespace — required for the private
+#                        registry (auth-gated even for pulls)
+#
 # Built-in ignored vars (docker-compose specific, wrong for k8s):
 #   MONGODB_URL   — localhost URL; helm constructs the in-cluster URL instead
 #   WHISPER_HOST  — compose service name; k8s uses the Service DNS name
@@ -118,7 +127,7 @@ fi
 # ---------------------------------------------------------------------------
 ERRORS=()
 
-[[ -z "${DOCKER_HUB_USER:-}" ]] && ERRORS+=("DOCKER_HUB_USER is not set in ${ENV_FILE}")
+[[ -z "${DOCKER_HUB_USER:-}" && -z "${IMAGE_REPOSITORY:-}" ]] && ERRORS+=("DOCKER_HUB_USER (or IMAGE_REPOSITORY) is not set in ${ENV_FILE}")
 [[ -z "${TELEGRAM_TOKEN:-}"  ]] && ERRORS+=("TELEGRAM_TOKEN is not set")
 [[ -z "${HF_TOKEN:-}"        ]] && ERRORS+=("HF_TOKEN is not set (required for Whisper diarization model)")
 
@@ -133,8 +142,11 @@ if [[ ${#ERRORS[@]} -gt 0 ]]; then
     exit 1
 fi
 
-REGISTRY="docker.io"
-REPO="${DOCKER_HUB_USER}"
+# IMAGE_REGISTRY/IMAGE_REPOSITORY let .env point at the cluster's private
+# registry (registry.149.222.209.65.nip.io/ai-apis) instead of Docker Hub —
+# see registry_setup.md. Falls back to the original Docker Hub behavior.
+REGISTRY="${IMAGE_REGISTRY:-docker.io}"
+REPO="${IMAGE_REPOSITORY:-${DOCKER_HUB_USER:-}}"
 
 # ---------------------------------------------------------------------------
 # Image definitions: name → dockerfile
@@ -196,6 +208,23 @@ echo "==> Writing ${OUTPUT_VALUES}"
 # Helper: emit a YAML string value, or empty string if unset
 val() { printf '%s' "${1:-}"; }
 
+# Helper: turn a comma-separated folder string (NEXTCLOUD_FOLDER's .env
+# format, unchanged from before multi-folder support) into a YAML list
+# literal, e.g. "a,b" -> ["a", "b"]. values.yaml's nextcloudFolders is a
+# list now; keep the .env-file UX (comma-separated string) identical for
+# operators and convert only here, at the point of writing my-values.yaml.
+nextcloud_folders_yaml() {
+    local IFS=','
+    local out="[" first=true
+    for f in $1; do
+        [ -z "$f" ] && continue
+        $first || out+=", "
+        out+="\"$(val "$f")\""
+        first=false
+    done
+    printf '%s]' "$out"
+}
+
 # When Keycloak is configured, hardcoded API keys are not needed — access is
 # managed per-consumer via Keycloak clients. Emit empty strings so the Helm
 # secret still renders but the values carry no sensitive data.
@@ -214,8 +243,9 @@ cat > "${OUTPUT_VALUES}" << YAML
 
 global:
   imageRegistry: "${REGISTRY}"
-  imageRepository: "$(val "${DOCKER_HUB_USER}")"
+  imageRepository: "$(val "${REPO}")"
   imageTag: "${TAG}"
+  imagePullSecret: "$(val "${IMAGE_PULL_SECRET:-}")"
   storageClass: longhorn
   apiKey: "$(val "${EFFECTIVE_API_KEY}")"
   adminApiKey: "$(val "${EFFECTIVE_ADMIN_KEY}")"
@@ -280,20 +310,20 @@ telegramBot:
 
 nextcloudSync:
   image: ai-apis-nextcloud
-  schedule: "$(val "${NEXTCLOUD_SCHEDULE:-0 2 * * *}")"
+  schedule: "$(val "${NEXTCLOUD_SCHEDULE:-*/30 * * * *}")"
   nextcloudUrl: "$(val "${NEXTCLOUD_URL:-}")"
   nextcloudUser: "$(val "${NEXTCLOUD_USER:-}")"
   nextcloudDavUser: "$(val "${NEXTCLOUD_DAV_USER:-}")"
   nextcloudPassword: "$(val "${NEXTCLOUD_PASSWORD:-}")"
-  nextcloudFolder: "$(val "${NEXTCLOUD_FOLDER:-}")"
+  nextcloudFolders: $(nextcloud_folders_yaml "${NEXTCLOUD_FOLDER:-}")
   numSpeakers: "$(val "${NUM_SPEAKERS:-}")"
   minSpeakers: "$(val "${MIN_SPEAKERS:-}")"
   maxSpeakers: "$(val "${MAX_SPEAKERS:-}")"
   whisperTimeout: "$(val "${WHISPER_TIMEOUT:-3600}")"
 
 nextcloudLlmSync:
-  schedule: "$(val "${NEXTCLOUD_LLM_SCHEDULE:-0 4 * * *}")"
-  nextcloudFolder: "$(val "${NEXTCLOUD_LLM_FOLDER:-}")"
+  schedule: "$(val "${NEXTCLOUD_LLM_SCHEDULE:-*/30 * * * *}")"
+  nextcloudFolders: $(nextcloud_folders_yaml "${NEXTCLOUD_LLM_FOLDER:-}")
   llmUrl: "$(val "${LLM_URL:-http://kubeai.llm.svc.cluster.local/openai/v1}")"
   llmDefaultModel: "$(val "${LLM_DEFAULT_MODEL:-glm-4-7-flash}")"
   llmTimeout: "$(val "${LLM_TIMEOUT:-900}")"

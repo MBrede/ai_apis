@@ -1,10 +1,17 @@
 """
 Nextcloud audio/video transcription sync.
 
-Scans a configured Nextcloud folder (recursively) for new audio/video files,
-transcribes them with speaker diarization via the local Whisper API, and
-uploads .txt and .srt outputs to a 'transcriptions/' subfolder next to each
-source file.
+Scans one or more configured Nextcloud folders (recursively, comma-separated
+in NEXTCLOUD_FOLDER) for new audio/video files, transcribes them with speaker
+diarization via the local Whisper API, and uploads .txt and .srt outputs to a
+'transcriptions/' subfolder next to each source file.
+
+Every audio/video file is transcribed unconditionally with the
+WHISPER_MODEL-env default (unsuffixed output), UNLESS a `<stem>.yaml`/`.yml`
+sidecar sits next to it with an `stt:` field (single model name or a list) —
+in that case the file is transcribed once per listed model, with output
+suffixed `<stem>_<model>.{txt,srt}` and skipped independently per model. See
+README_llm.md for the full sidecar schema (shared with sync_llm.py).
 
 All configuration is read from environment variables (see README_cron.md).
 """
@@ -21,6 +28,7 @@ import warnings
 from pathlib import Path
 
 import aiohttp
+import yaml
 from dotenv import load_dotenv
 from src.core.auth import build_auth_headers
 from tqdm import tqdm
@@ -55,6 +63,29 @@ AUDIO_VIDEO_MIME_TYPES: frozenset[str] = frozenset(
 )
 
 TRANSCRIPT_SUBFOLDER = "transcriptions"
+SIDECAR_SUFFIXES = (".yaml", ".yml")
+QWEN_MODEL_PREFIX = "qwen3-asr"
+ARK_MODEL_PREFIX = "ark-asr"
+HOJO_MODEL_PREFIX = "hojo-asr"
+GRANITE_MODEL_PREFIX = "granite-speech"
+NEMOTRON_MODEL_PREFIX = "nemotron"
+
+
+def _normalize_list(value: object) -> list[str]:
+    """Normalize a sidecar field that may be a scalar, a list, or absent.
+
+    Args:
+        value: Raw value from a parsed sidecar YAML dict (``data.get(key)``).
+
+    Returns:
+        ``[]`` if `value` is ``None``; the list of stringified items if
+        `value` is already a list; a 1-element list of `str(value)` otherwise.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return [str(value)]
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +133,16 @@ def _format_as_text(segments: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _make_webdav_client() -> tuple[Client, str]:
+def _make_webdav_client() -> tuple[Client, list[str]]:
     """Create a WebDAV client from environment variables.
 
+    NEXTCLOUD_FOLDER may list several folders, comma-separated (e.g.
+    ``"transcription,/Shared/1 Projects/MBS Benkana/transcription"``) — each
+    is scanned independently by callers. A single folder (no comma) produces
+    a 1-element list, identical to the pre-multi-folder behavior.
+
     Returns:
-        Tuple of (client, remote_root_path).
+        Tuple of (client, list of remote root paths, one per folder).
 
     Raises:
         KeyError: If a required environment variable is missing.
@@ -114,7 +150,7 @@ def _make_webdav_client() -> tuple[Client, str]:
     url = os.environ["NEXTCLOUD_URL"].rstrip("/")
     user = os.environ["NEXTCLOUD_USER"]
     password = os.environ["NEXTCLOUD_PASSWORD"]
-    folder = os.environ["NEXTCLOUD_FOLDER"].strip("/")
+    folders = [f.strip().strip("/") for f in os.environ["NEXTCLOUD_FOLDER"].split(",") if f.strip()]
     # NEXTCLOUD_DAV_USER: the internal Nextcloud username used in the WebDAV path.
     # Defaults to NEXTCLOUD_USER. Set this when the login credential (email) differs
     # from the internal username, e.g. NEXTCLOUD_USER=user@example.com but
@@ -127,8 +163,71 @@ def _make_webdav_client() -> tuple[Client, str]:
             "webdav_password": password,
         }
     )
-    remote_root = f"/remote.php/dav/files/{dav_user}/{folder}"
-    return client, remote_root
+    remote_roots = [f"/remote.php/dav/files/{dav_user}/{folder}" for folder in folders]
+    return client, remote_roots
+
+
+def _download_text(client: Client, remote_path: str, tmp_dir: Path) -> str:
+    """Download a small remote text file and return its contents.
+
+    Shared by sync.py (sidecar `stt:` parsing) and sync_llm.py (sidecar
+    parsing, prompt templates, transcripts).
+
+    Args:
+        client: WebDAV client.
+        remote_path: Remote file path to download.
+        tmp_dir: Local scratch directory for the temporary download.
+
+    Returns:
+        Decoded UTF-8 file contents.
+    """
+    local_path = tmp_dir / Path(remote_path).name
+    client.download_sync(remote_path=remote_path, local_path=str(local_path))
+    try:
+        return local_path.read_text(encoding="utf-8")
+    finally:
+        local_path.unlink(missing_ok=True)
+
+
+def _parse_sidecar_stt(text: str) -> list[str]:
+    """Return the STT models requested by a sidecar's `stt:` field.
+
+    Args:
+        text: Raw sidecar YAML contents.
+
+    Returns:
+        List of requested model names. Empty means "no sidecar opt-in" —
+        callers should fall back to the WHISPER_MODEL-env default with
+        unsuffixed output (today's behavior).
+    """
+    data = yaml.safe_load(text) or {}
+    return _normalize_list(data.get("stt"))
+
+
+def _backend_for_stt_model(model: str) -> str:
+    """Map a sidecar-requested STT model name to a whisper API `backend` value.
+
+    Args:
+        model: Model name from a sidecar's `stt:` field (e.g. "turbo",
+            "qwen3-asr-1.7b").
+
+    Returns:
+        "qwen3-asr"/"ark-asr"/"hojo-asr"/"granite-speech"/"nemotron-asr" if
+        the model name starts with the matching prefix, else "whisperx"
+        (today's implicit default backend).
+    """
+    name = model.lower()
+    if name.startswith(QWEN_MODEL_PREFIX):
+        return "qwen3-asr"
+    if name.startswith(ARK_MODEL_PREFIX):
+        return "ark-asr"
+    if name.startswith(HOJO_MODEL_PREFIX):
+        return "hojo-asr"
+    if name.startswith(GRANITE_MODEL_PREFIX):
+        return "granite-speech"
+    if name.startswith(NEMOTRON_MODEL_PREFIX):
+        return "nemotron-asr"
+    return "whisperx"
 
 
 def _ensure_transcript_folder(client: Client, remote_dir: str) -> str:
@@ -149,17 +248,26 @@ def _ensure_transcript_folder(client: Client, remote_dir: str) -> str:
     return transcript_dir
 
 
-def _collect_new_files(client: Client, remote_root: str) -> list[dict]:
-    """Recursively find audio/video files that have no transcript yet.
+def _collect_new_files(client: Client, remote_roots: list[str], tmp_dir: Path) -> list[dict]:
+    """Recursively find audio/video work items that still need transcription.
+
+    Each returned item is one (file, STT model) pair. A file with no sidecar,
+    or a sidecar with no `stt:` field, yields exactly one item with
+    `stt_model=None` — today's behavior: single WHISPER_MODEL-env-default
+    transcription, unsuffixed `<stem>.{txt,srt}` output, skipped if `<stem>`
+    already has a transcript. A file with a sidecar `stt: [m1, m2, ...]`
+    yields one item per listed model, each independently skippable via its
+    own `<stem>_<model>.{txt,srt}` output.
 
     Args:
         client: WebDAV client.
-        remote_root: Root remote folder to scan.
+        remote_roots: Root remote folders to scan (see _make_webdav_client).
+        tmp_dir: Local scratch directory for downloading sidecars.
 
     Returns:
-        List of WebDAV file-info dicts for files that still need transcription.
+        List of dicts: {"file": <WebDAV file-info dict>, "stt_model": str | None}.
     """
-    new_files: list[dict] = []
+    work_items: list[dict] = []
 
     def _walk(path: str) -> None:
         try:
@@ -173,6 +281,13 @@ def _collect_new_files(client: Client, remote_root: str) -> list[dict]:
         audio_video = [f for f in files if f.get("content_type", "") in AUDIO_VIDEO_MIME_TYPES]
 
         if audio_video:
+            audio_stems = {Path(f["path"]).stem for f in audio_video}
+            sidecars_by_stem = {
+                Path(f["path"]).stem: f["path"]
+                for f in files
+                if Path(f["path"]).suffix.lower() in SIDECAR_SUFFIXES and Path(f["path"]).stem in audio_stems
+            }
+
             transcript_dir = path.rstrip("/") + f"/{TRANSCRIPT_SUBFOLDER}/"
             try:
                 existing_stems = {Path(f).stem for f in client.list(transcript_dir)}
@@ -180,14 +295,31 @@ def _collect_new_files(client: Client, remote_root: str) -> list[dict]:
                 existing_stems = set()
 
             for f in audio_video:
-                if Path(f["path"]).stem not in existing_stems:
-                    new_files.append(f)
+                stem = Path(f["path"]).stem
+                sidecar_path = sidecars_by_stem.get(stem)
+                stt_models: list[str] = []
+                if sidecar_path:
+                    try:
+                        text = _download_text(client, sidecar_path, tmp_dir)
+                        stt_models = _parse_sidecar_stt(text)
+                    except Exception as exc:
+                        logger.error("Failed to read sidecar %s: %s", sidecar_path, exc)
+
+                if not stt_models:
+                    # No sidecar, or sidecar has no `stt:` — today's default behavior.
+                    if stem not in existing_stems:
+                        work_items.append({"file": f, "stt_model": None})
+                else:
+                    for model in stt_models:
+                        if f"{stem}_{model}" not in existing_stems:
+                            work_items.append({"file": f, "stt_model": model})
 
         for d in subdirs:
             _walk(d["path"])
 
-    _walk(remote_root)
-    return new_files
+    for root in remote_roots:
+        _walk(root)
+    return work_items
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +367,9 @@ def _speakers_from_filename(stem: str) -> int | None:
     return None
 
 
-def _build_diarize_params(stem: str | None = None) -> dict[str, str | int | bool]:
+def _build_diarize_params(
+    stem: str | None = None, model_override: str | None = None
+) -> dict[str, str | int | bool]:
     """Build query parameters for the /transcribe_and_diarize/ endpoint.
 
     Speaker count priority:
@@ -248,6 +382,11 @@ def _build_diarize_params(stem: str | None = None) -> dict[str, str | int | bool
 
     Args:
         stem: Filename stem of the file being transcribed (without extension).
+        model_override: STT model requested via a sidecar's `stt:` field.
+            When set, also selects the matching `backend` (see
+            `_backend_for_stt_model`) instead of the endpoint's default.
+            `None` preserves today's exact behavior (WHISPER_MODEL env
+            default, implicit `whisperx` backend).
 
     Returns:
         Query-parameter dict for the diarization endpoint.
@@ -256,8 +395,10 @@ def _build_diarize_params(stem: str | None = None) -> dict[str, str | int | bool
         ValueError: If no speaker count can be determined.
     """
     params: dict[str, str | int | bool] = {
-        "model_to_use": os.environ.get("WHISPER_MODEL", "turbo"),
+        "model_to_use": model_override or os.environ.get("WHISPER_MODEL", "turbo"),
     }
+    if model_override is not None:
+        params["backend"] = _backend_for_stt_model(model_override)
 
     # Filler-word retention from filename
     if stem is not None and _fillers_from_filename(stem):
@@ -338,27 +479,30 @@ async def main() -> None:
     """Main sync loop: scan → download → transcribe → upload."""
     load_dotenv()
 
-    client, remote_root = _make_webdav_client()
-
-    logger.info("Scanning %s for new audio/video files...", remote_root)
-    new_files = _collect_new_files(client, remote_root)
-
-    if not new_files:
-        logger.info("No new files to transcribe.")
-        return
-
-    logger.info("Found %d new file(s) to transcribe.", len(new_files))
+    client, remote_roots = _make_webdav_client()
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="nc_transcribe_"))
     try:
+        logger.info("Scanning %s for new audio/video files...", remote_roots)
+        work_items = _collect_new_files(client, remote_roots, tmp_dir)
+
+        if not work_items:
+            logger.info("No new files to transcribe.")
+            return
+
+        logger.info("Found %d work item(s) to transcribe.", len(work_items))
+
         timeout = aiohttp.ClientTimeout(total=int(os.environ.get("WHISPER_TIMEOUT", "3600")))
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            for file_info in tqdm(new_files, desc="Processing"):
+            for item in tqdm(work_items, desc="Processing"):
+                file_info: dict = item["file"]
+                stt_model: str | None = item["stt_model"]
                 remote_path: str = file_info["path"]
                 mime_type: str = file_info.get("content_type", "audio/wav")
                 stem = Path(remote_path).stem
+                output_stem = f"{stem}_{stt_model}" if stt_model else stem
                 suffix = Path(remote_path).suffix or ".wav"
-                local_audio = tmp_dir / f"{stem}{suffix}"
+                local_audio = tmp_dir / f"{output_stem}{suffix}"
 
                 # Download
                 try:
@@ -369,7 +513,7 @@ async def main() -> None:
 
                 # Transcribe (speaker count from filename, then env vars)
                 try:
-                    diarize_params = _build_diarize_params(stem)
+                    diarize_params = _build_diarize_params(stem, model_override=stt_model)
                 except ValueError as exc:
                     logger.error("Skipping %s: %s", remote_path, exc)
                     local_audio.unlink(missing_ok=True)
@@ -387,9 +531,9 @@ async def main() -> None:
                     (_format_as_text(segments), ".txt"),
                     (_format_as_srt(segments), ".srt"),
                 ):
-                    local_out = tmp_dir / f"{stem}{ext}"
+                    local_out = tmp_dir / f"{output_stem}{ext}"
                     local_out.write_text(content, encoding="utf-8")
-                    remote_out = transcript_dir + f"{stem}{ext}"
+                    remote_out = transcript_dir + f"{output_stem}{ext}"
                     try:
                         client.upload_sync(local_path=str(local_out), remote_path=remote_out)
                         logger.info("Uploaded %s", remote_out)
