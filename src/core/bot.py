@@ -298,7 +298,7 @@ async def handle_text_prompt(prompt, update, context, settings):
         + "&".join([f"{k}={settings[k]}" for k in settings])
         + f"&prompt={prompt}"
     )
-    response = requests.post(url, headers=build_auth_headers())
+    response = await asyncio.to_thread(requests.post, url, headers=build_auth_headers(), timeout=config.REQUEST_TIMEOUT)
     if response.status_code == 200:
         image_stream = BytesIO(response.content)
         image_stream.seek(0)
@@ -318,7 +318,9 @@ async def handle_photo_prompt(photo, prompt, update, context, settings):
         + f"prompt={prompt}&"
         + "&".join([f"{k}={settings[k]}" for k in settings])
     )
-    response = requests.post(url, files=files, headers=build_auth_headers())
+    response = await asyncio.to_thread(
+        requests.post, url, files=files, headers=build_auth_headers(), timeout=config.REQUEST_TIMEOUT
+    )
     if response.status_code == 200:
         image_stream = BytesIO(response.content)
         image_stream.seek(0)
@@ -427,7 +429,12 @@ async def add_lora(update: Update, context: CallbackContext) -> None:
     if privileges == 2:
         if context.args:
             lora_name = " ".join(context.args)
-            response = requests.post(f"{SD_ENDPOINT}/add_new_lora?name={lora_name}", headers=build_auth_headers(config.ADMIN_API_KEY))
+            response = await asyncio.to_thread(
+                requests.post,
+                f"{SD_ENDPOINT}/add_new_lora?name={lora_name}",
+                headers=build_auth_headers(config.ADMIN_API_KEY),
+                timeout=config.REQUEST_TIMEOUT,
+            )
             if response.ok:
                 await update.message.reply_text(
                     f"LORA model '{lora_name}' added successfully."
@@ -458,7 +465,12 @@ async def get_loras(update: Update, context: CallbackContext) -> None:
     """Fetch and display available LORA models."""
     privileges = await check_privileges(update)
     if privileges:
-        response = requests.get(f"{SD_ENDPOINT}/get_available_loras", headers=build_auth_headers())
+        response = await asyncio.to_thread(
+            requests.get,
+            f"{SD_ENDPOINT}/get_available_loras",
+            headers=build_auth_headers(),
+            timeout=config.REQUEST_TIMEOUT,
+        )
         if response.status_code == 200:
             loras = response.json()
             loras_text = "Available LORAs:\n"
@@ -478,7 +490,12 @@ async def get_sd(update: Update, context: CallbackContext) -> None:
     """Fetch and display available Stable Diffusion models."""
     privileges = await check_privileges(update)
     if privileges:
-        response = requests.get(f"{SD_ENDPOINT}/get_available_stable_diffs", headers=build_auth_headers())
+        response = await asyncio.to_thread(
+            requests.get,
+            f"{SD_ENDPOINT}/get_available_stable_diffs",
+            headers=build_auth_headers(),
+            timeout=config.REQUEST_TIMEOUT,
+        )
         if response.status_code == 200:
             sd_models = response.json()
             sd_text = "Available Stable Diffusion Models:\n" + "\n".join(sd_models.values())
@@ -539,7 +556,8 @@ async def llm_handler(update: Update, context: CallbackContext) -> None:
 
         try:
             # OLLAMA API format
-            response = requests.post(
+            response = await asyncio.to_thread(
+                requests.post,
                 f"{OLLAMA_ENDPOINT}/api/generate",
                 json={
                     "model": config.OLLAMA_MODEL,
@@ -587,7 +605,8 @@ Include specific elements like setting, mood, style, and use emphasis notation l
 Start your response with 'Description:' followed by the detailed prompt."""
 
         try:
-            response = requests.post(
+            response = await asyncio.to_thread(
+                requests.post,
                 f"{OLLAMA_ENDPOINT}/api/generate",
                 json={
                     "model": config.OLLAMA_MODEL,
@@ -634,7 +653,8 @@ Include specific elements like setting, mood, style, and use emphasis notation l
 Start your response with 'Description:' followed by the detailed prompt."""
 
         try:
-            response = requests.post(
+            response = await asyncio.to_thread(
+                requests.post,
                 f"{OLLAMA_ENDPOINT}/api/generate",
                 json={
                     "model": config.OLLAMA_MODEL,
@@ -675,7 +695,7 @@ async def img2prompt_handler(update: Update, context: CallbackContext, photo) ->
         files = {"image": ("image.jpg", BytesIO(photo_bytes), "image/jpeg")}
         # UniDiffuser endpoint (different port from SD)
         url = f"{SD_ENDPOINT.replace(':8000', ':8001')}/img2prompt"
-        response = requests.post(url, files=files)
+        response = await asyncio.to_thread(requests.post, url, files=files, timeout=config.REQUEST_TIMEOUT)
         if response.status_code == 200:
             prompt_text = response.text
             await update.message.reply_text(f"Generated text: {prompt_text}")
@@ -825,6 +845,7 @@ async def diarize_command(update: Update, context: CallbackContext) -> None:
                     params=params,
                     files={"file": (tmp_path, audio_file, mime)},
                     headers=build_auth_headers(),
+                    timeout=config.REQUEST_TIMEOUT,
                 )
 
         loop = asyncio.get_event_loop()
@@ -869,7 +890,9 @@ async def audio_transcription(update: Update, context: CallbackContext, sound) -
                 tmp.write(audio_bytes)
                 files = {"file": (tmp.name, open(tmp.name, "rb"), sound.mime_type)}
                 url = f"{WHISPER_ENDPOINT}/transcribe?model_to_use=turbo"
-                response = requests.post(url, files=files, headers=build_auth_headers())
+                response = await asyncio.to_thread(
+                    requests.post, url, files=files, headers=build_auth_headers(), timeout=config.REQUEST_TIMEOUT
+                )
 
                 transcription = json.loads(response.text)["answer"]
 
