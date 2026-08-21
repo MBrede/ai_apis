@@ -206,7 +206,11 @@ nextcloudSync:
   # Cron schedule for the sync job. Every 30min is safe here — sync_llm.py
   # and the whisper sync are both incremental (skip files already processed,
   # via sidecar/mtime tracking), so a no-op run just exits fast and cheap.
-  schedule: "*/30 * * * *"
+  # Runs on the hour/half-hour; nextcloudLlmSync.schedule runs 15min later
+  # so it always finds this run's transcripts already done instead of
+  # racing it (whisper transcription is quick, well under 15min for the
+  # short test clips this pipeline has handled so far).
+  schedule: "0,30 * * * *"
 
   # Base URL of the Nextcloud instance (e.g. https://nextcloud.example.com)
   nextcloudUrl: ""
@@ -251,8 +255,10 @@ nextcloudSync:
 nextcloudLlmSync:
   # Cron schedule for the LLM sync job. Every 30min is safe — skips any
   # sidecar whose output already exists (see sync_llm.py), so a no-op run
-  # just exits fast and cheap. Same reasoning as nextcloudSync.schedule above.
-  schedule: "*/30 * * * *"
+  # just exits fast and cheap. Offset 15min after nextcloudSync.schedule
+  # (0,30) so this job's transcript lookups almost always find that run's
+  # output already uploaded instead of racing it on the same tick.
+  schedule: "15,45 * * * *"
 
   # Remote Nextcloud folder(s) to scan for sidecars. List.
   # Leave empty (`[]`) to reuse nextcloudSync.nextcloudFolders (the same

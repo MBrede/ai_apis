@@ -310,7 +310,7 @@ telegramBot:
 
 nextcloudSync:
   image: ai-apis-nextcloud
-  schedule: "$(val "${NEXTCLOUD_SCHEDULE:-*/30 * * * *}")"
+  schedule: "$(val "${NEXTCLOUD_SCHEDULE:-0,30 * * * *}")"
   nextcloudUrl: "$(val "${NEXTCLOUD_URL:-}")"
   nextcloudUser: "$(val "${NEXTCLOUD_USER:-}")"
   nextcloudDavUser: "$(val "${NEXTCLOUD_DAV_USER:-}")"
@@ -322,7 +322,7 @@ nextcloudSync:
   whisperTimeout: "$(val "${WHISPER_TIMEOUT:-3600}")"
 
 nextcloudLlmSync:
-  schedule: "$(val "${NEXTCLOUD_LLM_SCHEDULE:-*/30 * * * *}")"
+  schedule: "$(val "${NEXTCLOUD_LLM_SCHEDULE:-15,45 * * * *}")"
   nextcloudFolders: $(nextcloud_folders_yaml "${NEXTCLOUD_LLM_FOLDER:-}")
   llmUrl: "$(val "${LLM_URL:-http://kubeai.llm.svc.cluster.local/openai/v1}")"
   llmDefaultModel: "$(val "${LLM_DEFAULT_MODEL:-glm-4-7-flash}")"
