@@ -65,8 +65,11 @@ whisper:
   # Hugging Face API token — needed to download gated models
   hfToken: ""
 
-  # Size of the PVC mounted at /root/.cache for model caching
-  cacheStorage: 20Gi
+  # Size of the PVC mounted at /root/.cache for model caching. 20Gi filled
+  # up (100% used, download failures) once all STT backends were cached
+  # simultaneously (~30GB across turbo/qwen3-asr/ark-asr/hojo-asr/
+  # granite-speech/nemotron-asr + their aligners) — bumped 2026-08-21.
+  cacheStorage: 40Gi
 
   # Default Whisper model to load on startup (e.g. turbo, large-v3)
   defaultModel: turbo

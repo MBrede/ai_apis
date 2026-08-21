@@ -10,6 +10,7 @@ To start:
     gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -130,13 +131,14 @@ async def transcribe(
     """Transcribe audio file using Whisper."""
     if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
         logger.info(f"Loading Whisper model on request: {model_to_use}")
-        whisper_buffer.load_model(model_to_use)
+        await asyncio.to_thread(whisper_buffer.load_model, model_to_use)
 
     with open(file.filename, "wb") as f:
         file_contents = await file.read()
         f.write(file_contents)
 
-    answer = whisper_buffer.transcribe(file.filename, verbose=False)["text"]
+    result = await asyncio.to_thread(whisper_buffer.transcribe, file.filename, verbose=False)
+    answer = result["text"]
     os.remove(file.filename)
     return {"answer": answer}
 
@@ -197,9 +199,10 @@ async def transcribe_diarize(
             if include_fillers and backend != "whisperx":
                 logger.warning("include_fillers has no effect with backend=%s — ignoring.", backend)
 
-            buf.ensure_loaded(model_to_use)
+            await asyncio.to_thread(buf.ensure_loaded, model_to_use)
 
-            chunks = buf.transcribe_and_diarize(
+            chunks = await asyncio.to_thread(
+                buf.transcribe_and_diarize,
                 file.filename,
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,
@@ -210,13 +213,14 @@ async def transcribe_diarize(
         else:
             if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
                 logger.info(f"Loading Whisper model on request: {model_to_use}")
-                whisper_buffer.load_model(model_to_use)
+                await asyncio.to_thread(whisper_buffer.load_model, model_to_use)
 
             if not diarization_buffer.is_loaded():
                 logger.info("Loading diarization pipeline on request")
-                diarization_buffer.load_model()
+                await asyncio.to_thread(diarization_buffer.load_model)
 
-            chunks = diarize_audio(
+            chunks = await asyncio.to_thread(
+                diarize_audio,
                 file.filename,
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,

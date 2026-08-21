@@ -16,6 +16,19 @@ ArkASRBuffer.
 Dependency note: the `hojo-asr` PyPI package pins `torch<2.6`, incompatible
 with this project's `torch>=2.6.0` — installed with `--no-deps` in
 `Dockerfile.whisper`/`Dockerfile.whisper.hub` instead of via `pyproject.toml`.
+
+KNOWN BROKEN as of 2026-08-21: confirmed against a real deploy, this backend
+currently crashes on load with `AttributeError: Qwen2Tokenizer has no
+attribute additional_special_tokens` (`hojo_asr/hojo_asr_model.py`'s own
+`__init__`, not this file). The bundled package's tokenizer-init code
+assumes an older `transformers` API surface than this container's
+`transformers>=5.8` (forced by GraniteSpeechBuffer/ArkASRBuffer) provides —
+same class of `--no-deps` risk flagged above, but the actual code (not just
+the declared version pin) has now proven incompatible. Not fixable from
+this file; would need either a `hojo-asr` release compatible with
+transformers 5.x, or vendoring/patching its tokenizer-init code. Given this
+backend doesn't support German anyway (this deployment's primary language),
+not prioritized for a fix.
 """
 
 from datetime import datetime

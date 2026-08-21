@@ -13,11 +13,12 @@ special-case `"whisperx"` (honors a requested Whisper size) and the legacy
 
 from .ark_asr import ArkASRBuffer
 from .base import DiarizingASRBuffer
+from .diarization import DiarizationBuffer
 from .granite_speech import GraniteSpeechBuffer
 from .hojo_asr import HojoASRBuffer
-from .legacy import DiarizationBuffer, WhisperBuffer
 from .nemotron_asr import NemotronASRBuffer
 from .qwen3_asr import Qwen3ASRBuffer
+from .whisper import WhisperBuffer
 from .whisperx_backend import FILLER_PROMPT, WhisperXBuffer
 
 __all__ = [
