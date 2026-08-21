@@ -13,7 +13,20 @@ WORKDIR /app
 # Install only service-specific packages (base already has api-core and ml-base)
 # This installs: openai-whisper, pyannote-audio, ffmpeg-python
 COPY pyproject.toml README.md /app/
-RUN UV_HTTP_TIMEOUT=300 uv pip install -e "/app[whisper-only]"
+# --prerelease=allow: whisperx's stable releases (<=3.8.6) pin
+# huggingface-hub<1.0.0, incompatible with transformers>=5.8 (needed by the
+# Granite-Speech backend, which itself requires huggingface-hub>=1.5.0).
+# whisperx==3.8.7rc1 drops that pin (huggingface-hub>=0.28.1, no upper
+# bound) — resolves cleanly, no --no-deps hack needed for whisperx itself.
+RUN UV_HTTP_TIMEOUT=300 uv pip install --prerelease=allow -e "/app[whisper-only]"
+# qwen-asr pins transformers==4.57.6 (conflicts with whisper-only's
+# transformers>=5.8, needed by the Granite-Speech backend); hojo-asr pins
+# torch<2.6 (conflicts with the base image's torch>=2.6.0). Both installed
+# with --no-deps so neither downgrades transformers/torch out from under
+# the rest of the container; their own code is expected to work fine
+# against the newer pins, the upstream pins are just conservative. See
+# Dockerfile.whisper's identical comment.
+RUN uv pip install --no-deps qwen-asr hojo-asr
 
 # Copy source code
 COPY src/core/ /app/src/core/

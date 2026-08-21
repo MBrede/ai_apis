@@ -5,7 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_NO_CACHE=1 \
-    UV_SYSTEM_PYTHON=1
+    UV_SYSTEM_PYTHON=1 \
+    UV_BREAK_SYSTEM_PACKAGES=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -20,15 +21,29 @@ RUN apt-get update && apt-get install -y \
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# Install uv
+# Install uv (the installer script now targets ~/.local/bin, not ~/.cargo/bin
+# — the old path here was stale and made every `uv` call silently fail)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
 # Copy and install dependencies
 COPY pyproject.toml README.md /app/
-RUN uv pip install -e "/app[whisper]"
+# --prerelease=allow: whisperx's stable releases (<=3.8.6) pin
+# huggingface-hub<1.0.0, incompatible with transformers>=5.8 (needed by the
+# Granite-Speech backend, which itself requires huggingface-hub>=1.5.0).
+# whisperx==3.8.7rc1 drops that pin (huggingface-hub>=0.28.1, no upper
+# bound) — resolves cleanly, no --no-deps hack needed for whisperx itself.
+RUN uv pip install --prerelease=allow -e "/app[whisper]"
+# qwen-asr pins transformers==4.57.6 (conflicts with whisper-only's
+# transformers>=5.8, needed by the Granite-Speech backend); hojo-asr pins
+# torch<2.6 (conflicts with this image's torch>=2.6.0, ml-base, shared by
+# every other backend here). Both installed with --no-deps so neither
+# downgrades transformers/torch out from under the rest of the container;
+# their own code is expected to work fine against the newer pins, the
+# upstream pins are just conservative.
+RUN uv pip install --no-deps qwen-asr hojo-asr
 
 # Copy source code
 COPY src/core/ /app/src/core/

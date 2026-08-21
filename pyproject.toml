@@ -71,6 +71,26 @@ whisper-only = [
     "pyannote-audio>=4.0.1",
     "ffmpeg-python>=0.2.0",
     "python-multipart>=0.0.20",
+    # ARK-ASR-3B backend (whisper_api.py's ArkASRBuffer, transformers.
+    # AutoModelForCausalLM(trust_remote_code=True)) and Granite-Speech-4.1
+    # backend (GraniteSpeechBuffer, AutoModelForSpeechSeq2Seq) — floor raised
+    # to >=5.8 for Granite per https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus
+    # (2026-08-21). NOTE: this makes `ai-apis[apis]`/`ai-apis[all]` (which
+    # combine whisper-only with text-analysis-only's pinned transformers==4.57.6)
+    # unsatisfiable as a combo — neither extra is used together by any
+    # Dockerfile in this repo (whisper and text-analysis are separate
+    # containers), so this is accepted fallout, not fixed here.
+    "transformers>=5.8",
+    "accelerate>=1.2.1",  # required for AutoModel*.from_pretrained(device_map=...) — ArkASRBuffer/GraniteSpeechBuffer
+    "librosa>=0.10.0",  # required by NemotronASRBuffer's transformers.pipeline() feature extractor
+    "soundfile>=0.12.1",  # HojoASRBuffer writes diarize-turn slices to temp wav files
+    # Qwen3-ASR backend (whisper_api.py's Qwen3ASRBuffer) and Hojo-ASR-V1
+    # backend (HojoASRBuffer) are intentionally NOT listed here — `qwen-asr`
+    # pins transformers==4.57.6 (conflicts with the >=5.8 floor above) and
+    # `hojo-asr` pins torch<2.6 (conflicts with this project's torch>=2.6.0,
+    # ml-base, shared by every other GPU workload in this container). Both
+    # installed with --no-deps in Dockerfile.whisper/Dockerfile.whisper.hub
+    # instead; see those files' comments.
 ]
 
 text-analysis-only = [
@@ -138,14 +158,45 @@ cuda = [
     "nvidia-cudnn-cu12>=9.1.0.70",
 ]
 
-# All APIs (no bot, no training)
+# All APIs (no bot, no training). Excludes whisper and text-analysis: since
+# Granite-Speech (whisper-only) needs transformers>=5.8, it now conflicts
+# with text-analysis-only's transformers==4.57.6 pin AND (transitively
+# through `all`) llm-training's unsloth<=5.x transformers ceiling. No
+# Dockerfile in this repo ever installs whisper alongside either of those
+# (each is its own container), so `apis`/`all` never represented a real
+# combo — kept as bot+stable-diffusion+dev+quantization+cuda instead of
+# chasing every other extra's transformers pin one at a time.
 apis = [
-    "ai-apis[stable-diffusion,whisper,text-analysis]",
+    "ai-apis[stable-diffusion]",
 ]
 
 # Everything including bot and training
 all = [
     "ai-apis[bot,apis,llm-training,dev,quantization,cuda]",
+]
+
+[tool.uv]
+# whisper/whisper-only need transformers>=5.8 (Granite-Speech backend).
+# text-analysis(-only) hard-pins transformers==4.57.6, and llm-training/all
+# transitively cap it via unsloth's own upper bound — genuinely incompatible
+# versions of the same package. No Dockerfile in this repo ever installs
+# whisper alongside any of these (separate containers), but uv's
+# project-wide lock resolves every declared top-level extra into ONE mutual
+# solution by default, regardless of whether anything actually combines
+# them — so `uv run`/`uv lock` fails outright without this. Declaring each
+# pair conflicting splits the resolution into per-extra forks instead. Full
+# cross product of {whisper, whisper-only} x {the four conflicting extras}
+# is listed because uv doesn't infer conflicts transitively through a
+# wrapper extra (e.g. `whisper` including `whisper-only`).
+conflicts = [
+    [{ extra = "whisper-only" }, { extra = "text-analysis-only" }],
+    [{ extra = "whisper-only" }, { extra = "text-analysis" }],
+    [{ extra = "whisper-only" }, { extra = "llm-training" }],
+    [{ extra = "whisper-only" }, { extra = "all" }],
+    [{ extra = "whisper" }, { extra = "text-analysis-only" }],
+    [{ extra = "whisper" }, { extra = "text-analysis" }],
+    [{ extra = "whisper" }, { extra = "llm-training" }],
+    [{ extra = "whisper" }, { extra = "all" }],
 ]
 
 [project.urls]

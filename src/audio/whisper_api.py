@@ -1,6 +1,11 @@
 """
 Whisper Audio Transcription API with speaker diarization.
 
+Model/buffer classes live in `src.audio.stt_backends` (one module per
+backend, shared base classes for the two common shapes — see
+`stt_backends/base.py`). This file is just the FastAPI routing layer:
+endpoints, request/response shaping, and legacy per-segment orchestration.
+
 To start:
     gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
@@ -10,246 +15,20 @@ import os
 import subprocess
 import tempfile
 from collections import Counter
-from contextlib import contextmanager
-from dataclasses import replace as dataclass_replace
-from datetime import datetime
 
-import torch
-import whisper
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
-from src.core.app_factory import create_app
 from fastapi.responses import JSONResponse
-from pyannote.audio import Pipeline
 
+from src.audio.stt_backends import (
+    BACKEND_REGISTRY,
+    FILLER_PROMPT,
+    diarization_buffer,
+    whisper_buffer,
+)
+from src.core.app_factory import create_app
 from src.core.auth_dependencies import verify_api_key
-from src.core.buffer_class import Model_Buffer
-from src.core.config import config
 
 logger = logging.getLogger(__name__)
-
-
-class WhisperBuffer(Model_Buffer):
-    """Buffer for Whisper transcription model with automatic unloading."""
-
-    def __init__(self):
-        super().__init__()
-        self.model_name: str = None
-
-    def load_model(self, model_name: str, timeout: int = 300, **kwargs):
-        """Load Whisper model with automatic unloading after timeout."""
-        if self.is_loaded() and self.model_name == model_name:
-            self.reset_timer(timeout)
-            return
-
-        super().load_model(timeout=timeout)
-
-        self.model = whisper.load_model(model_name, **kwargs)
-        self.model_name = model_name
-        self.loaded_at = datetime.now()
-
-        if self.timer:
-            self.timer.start()
-
-    def transcribe(self, audio_path: str, **kwargs) -> dict:
-        """Transcribe audio file."""
-        if not self.is_loaded():
-            raise RuntimeError("Model not loaded. Call load_model() first.")
-
-        self.reset_timer()
-        return self.model.transcribe(audio_path, **kwargs)
-
-
-class DiarizationBuffer(Model_Buffer):
-    """Buffer for pyannote speaker diarization pipeline."""
-
-    def __init__(self):
-        super().__init__()
-
-    def load_model(self, timeout: int = 300, **kwargs):
-        """Load diarization pipeline with automatic unloading after timeout."""
-        if self.is_loaded():
-            self.reset_timer(timeout)
-            return
-
-        super().load_model(timeout=timeout)
-
-        self.pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-community-1", token=config.HF_TOKEN
-        ).to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-
-        self.loaded_at = datetime.now()
-
-        if self.timer:
-            self.timer.start()
-
-    def diarize(
-        self,
-        audio_path: str,
-        num_speakers: int = None,
-        min_speakers: int = None,
-        max_speakers: int = None,
-    ):
-        """Perform speaker diarization on audio file."""
-        if not self.is_loaded():
-            raise RuntimeError("Pipeline not loaded. Call load_model() first.")
-
-        self.reset_timer()
-
-        if num_speakers is not None:
-            return self.pipeline(audio_path, num_speakers=num_speakers)
-        elif min_speakers is not None:
-            return self.pipeline(audio_path, min_speakers=min_speakers, max_speakers=max_speakers)
-        else:
-            raise ValueError(
-                "Either num_speakers or min_speakers and max_speakers must be provided."
-            )
-
-
-class WhisperXBuffer(Model_Buffer):
-    """Buffer for WhisperX pipeline: batched transcription + forced alignment + diarization."""
-
-    def __init__(self):
-        super().__init__()
-        self.model_name: str = None
-        self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
-        self.compute_type: str = "float16" if torch.cuda.is_available() else "int8"
-        self._align_cache: dict = {}  # language_code -> (align_model, metadata)
-        self._diarize_pipeline = None
-
-    def load_model(self, model_name: str, timeout: int = 300):
-        """Load WhisperX transcription model with automatic unloading after timeout."""
-        if self.is_loaded() and self.model_name == model_name:
-            self.reset_timer(timeout)
-            return
-
-        import whisperx
-
-        super().load_model(timeout=timeout)
-
-        self.model = whisperx.load_model(model_name, self.device, compute_type=self.compute_type)
-        self.model_name = model_name
-        self.loaded_at = datetime.now()
-
-        if self.timer:
-            self.timer.start()
-
-    def _align_model(self, language_code: str):
-        import whisperx
-
-        if language_code not in self._align_cache:
-            self._align_cache[language_code] = whisperx.load_align_model(
-                language_code=language_code, device=self.device
-            )
-        return self._align_cache[language_code]
-
-    def _diarize_pipeline_instance(self):
-        from whisperx.diarize import DiarizationPipeline
-
-        if self._diarize_pipeline is None:
-            self._diarize_pipeline = DiarizationPipeline(
-                token=config.HF_TOKEN, device=self.device
-            )
-        return self._diarize_pipeline
-
-    def transcribe_and_diarize(
-        self,
-        audio_path: str,
-        batch_size: int = 16,
-        num_speakers: int | None = None,
-        min_speakers: int | None = None,
-        max_speakers: int | None = None,
-        align: bool = True,
-        initial_prompt: str | None = None,
-    ) -> list[dict]:
-        """Transcribe, align, and diarize in one pass. Speaker constraints are optional.
-
-        Args:
-            align: Run forced phoneme-level alignment before speaker assignment.
-                Improves speaker boundary precision but can degrade quality when
-                the wav2vec2 model has weak support for the detected language.
-                Set to False to use segment-level timestamps instead.
-            initial_prompt: Seed text injected via FasterWhisperPipeline.options.
-                Used to nudge Whisper towards retaining filler words.
-        """
-        import whisperx
-
-        if not self.is_loaded():
-            raise RuntimeError("Model not loaded. Call load_model() first.")
-
-        self.reset_timer()
-
-        audio = whisperx.load_audio(audio_path)
-
-        # 1. Batched transcription of full audio (preserves context, far less hallucination)
-        with _patched_initial_prompt(self.model, initial_prompt):
-            result = self.model.transcribe(audio, batch_size=batch_size)
-        language = result["language"]
-
-        # 2. Forced phoneme-level alignment for word timestamps (optional)
-        if align:
-            try:
-                model_a, metadata = self._align_model(language)
-                result = whisperx.align(
-                    result["segments"], model_a, metadata, audio, self.device,
-                    return_char_alignments=False,
-                )
-                logger.info("Alignment complete for language '%s'", language)
-            except Exception as exc:
-                logger.warning(
-                    "Alignment failed for language '%s' (%s) — falling back to segment timestamps",
-                    language, exc,
-                )
-
-        # 3. Diarize (speaker constraints optional — pyannote can auto-detect)
-        diarize_kwargs: dict = {}
-        if num_speakers is not None:
-            diarize_kwargs["min_speakers"] = num_speakers
-            diarize_kwargs["max_speakers"] = num_speakers
-        elif min_speakers is not None:
-            diarize_kwargs["min_speakers"] = min_speakers
-            diarize_kwargs["max_speakers"] = max_speakers
-        diarize_segments = self._diarize_pipeline_instance()(audio, **diarize_kwargs)
-
-        # 4. Assign speakers to transcript segments
-        result = whisperx.assign_word_speakers(diarize_segments, result)
-
-        # Merge consecutive segments from the same speaker into one turn
-        return _merge_speaker_segments(result["segments"], language)
-
-
-def _merge_speaker_segments(segments: list[dict], language: str) -> list[dict]:
-    """Collapse consecutive WhisperX segments from the same speaker into one turn."""
-    if not segments:
-        return []
-
-    merged: list[dict] = []
-    cur = dict(segments[0])
-
-    for seg in segments[1:]:
-        if seg.get("speaker", "UNKNOWN") == cur.get("speaker", "UNKNOWN"):
-            cur["end"] = seg["end"]
-            cur["text"] = cur["text"].rstrip() + " " + seg["text"].strip()
-        else:
-            merged.append(cur)
-            cur = dict(seg)
-    merged.append(cur)
-
-    return [
-        {
-            "SPEAKER": s.get("speaker", "UNKNOWN"),
-            "START": s["start"],
-            "DURATION": s["end"] - s["start"],
-            "TRANSCRIPTION": s["text"].strip(),
-            "LANGUAGE": language,
-        }
-        for s in merged
-    ]
-
-
-# Global buffer instances — models load on first request (lazy loading)
-whisper_buffer = WhisperBuffer()
-diarization_buffer = DiarizationBuffer()
-whisperx_buffer = WhisperXBuffer()
 
 
 def _words_per_second(text: str, duration: float) -> float:
@@ -299,26 +78,6 @@ def filter_transcription_chunks(
         )
 
     return result
-
-
-FILLER_PROMPT = (
-    "Äh, ähm, also, ja, genau, hmm, nein, okay, ne, eben, halt, eigentlich, "
-    "um, uh, yeah, so, like, I mean, you know, erm, ah, right, well, actually"
-)
-
-
-@contextmanager
-def _patched_initial_prompt(pipeline, prompt: str | None):
-    """Temporarily inject initial_prompt into a FasterWhisperPipeline via its options dataclass."""
-    if not prompt or not hasattr(pipeline, "options"):
-        yield
-        return
-    original = pipeline.options
-    try:
-        pipeline.options = dataclass_replace(original, initial_prompt=prompt)
-        yield
-    finally:
-        pipeline.options = original
 
 
 app = create_app(
@@ -401,7 +160,16 @@ async def transcribe_diarize(
     Args:
         backend: "whisperx" (default) transcribes the full audio in one batched pass,
             then aligns word timestamps and assigns speakers — far less hallucination.
-            "whisper" uses the legacy per-segment approach (pyannote → ffmpeg → whisper).
+            "qwen3-asr" uses Qwen3-ASR-1.7B + Qwen3-ForcedAligner instead of
+            Whisper/WhisperX. "granite-speech" (ibm-granite/granite-speech-4.1-2b-plus,
+            supports German) uses its own word-timestamp prompt, same
+            align-then-diarize shape as qwen3-asr. "ark-asr" (Audio8/ARK-ASR-3B),
+            "hojo-asr" (HojoAI/Hojo-ASR-V1, no German support), and "nemotron-asr"
+            (nvidia/nemotron-3.5-asr-streaming-0.6b) diarize first and transcribe
+            each speaker turn separately, since none of those three expose
+            word-level timestamps. See `src.audio.stt_backends` for each
+            backend's implementation. "whisper" uses the legacy per-segment
+            approach (pyannote → ffmpeg → whisper).
         max_words_per_second: Remove chunks whose word rate exceeds this value.
             Human speech peaks at ~6 WPS; higher values are Whisper hallucinations.
             Set to 0 to disable.
@@ -411,7 +179,9 @@ async def transcribe_diarize(
             WhisperX backend accepts this as a hint but can auto-detect.
         include_fillers: Inject a prompt nudging Whisper to retain filler words
             (ähm, uhm, erm, etc.) that it would otherwise suppress.
-            Only effective with the whisperx backend.
+            Only effective with the whisperx backend — ignored (with a
+            warning) for every other backend, none of which have an
+            equivalent prompt-injection mechanism.
     """
     wps_limit = max_words_per_second if max_words_per_second and max_words_per_second > 0 else None
     lang_limit = top_n_languages if top_n_languages and top_n_languages > 0 else None
@@ -422,18 +192,20 @@ async def transcribe_diarize(
         f.write(file_contents)
 
     try:
-        if backend == "whisperx":
-            if not whisperx_buffer.is_loaded() or whisperx_buffer.model_name != model_to_use:
-                logger.info(f"Loading WhisperX model on request: {model_to_use}")
-                whisperx_buffer.load_model(model_to_use)
+        if backend in BACKEND_REGISTRY:
+            buf = BACKEND_REGISTRY[backend]
+            if include_fillers and backend != "whisperx":
+                logger.warning("include_fillers has no effect with backend=%s — ignoring.", backend)
 
-            chunks = whisperx_buffer.transcribe_and_diarize(
+            buf.ensure_loaded(model_to_use)
+
+            chunks = buf.transcribe_and_diarize(
                 file.filename,
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
                 align=align,
-                initial_prompt=filler_prompt,
+                initial_prompt=filler_prompt if backend == "whisperx" else None,
             )
         else:
             if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
@@ -462,11 +234,12 @@ async def transcribe_diarize(
 @router.get("/buffer_status/")
 async def get_buffer_status(api_key: str = Depends(verify_api_key)):
     """Get current buffer status for debugging."""
-    return {
+    status = {
         "whisper": whisper_buffer.get_status(),
         "diarization": diarization_buffer.get_status(),
-        "whisperx": whisperx_buffer.get_status(),
     }
+    status.update({name.replace("-", "_"): buf.get_status() for name, buf in BACKEND_REGISTRY.items()})
+    return status
 
 
 @router.get("/health")
@@ -479,24 +252,23 @@ async def health_check():
     """
     logger.info("=== WHISPER HEALTH CHECK STARTED ===")
     try:
-        whisper_status = whisper_buffer.get_status()
-        diarization_status = diarization_buffer.get_status()
-        whisperx_status = whisperx_buffer.get_status()
+        statuses = {
+            "whisper": whisper_buffer.get_status(),
+            "diarization": diarization_buffer.get_status(),
+        }
+        statuses.update({name.replace("-", "_"): buf.get_status() for name, buf in BACKEND_REGISTRY.items()})
 
-        whisper_healthy = whisper_status is not None
-        diarization_healthy = diarization_status is not None
-        whisperx_healthy = whisperx_status is not None
-        is_healthy = whisper_healthy and diarization_healthy and whisperx_healthy
+        healthy = {name: status is not None for name, status in statuses.items()}
+        is_healthy = all(healthy.values())
 
         response_data = {
             "status": "healthy" if is_healthy else "unhealthy",
             "service": "whisper-api",
-            "whisper_buffer_accessible": whisper_healthy,
-            "diarization_buffer_accessible": diarization_healthy,
-            "whisperx_buffer_accessible": whisperx_healthy,
-            "whisper_model_loaded": whisper_status.get("is_loaded", False) if whisper_status else False,
-            "diarization_model_loaded": diarization_status.get("is_loaded", False) if diarization_status else False,
-            "whisperx_model_loaded": whisperx_status.get("is_loaded", False) if whisperx_status else False,
+            **{f"{name}_buffer_accessible": ok for name, ok in healthy.items()},
+            **{
+                f"{name}_model_loaded": status.get("is_loaded", False) if status else False
+                for name, status in statuses.items()
+            },
             "note": "Models will load on first request",
         }
 
