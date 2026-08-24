@@ -105,7 +105,9 @@ def _parse_sidecar(text: str) -> dict:
     return _sidecar_from_dict(yaml.safe_load(text) or {})
 
 
-def _collect_llm_jobs(client: Client, remote_roots: list[str], tmp_dir: Path) -> list[dict]:
+def _collect_llm_jobs(
+    client: Client, remote_roots: list[str], tmp_dir: Path
+) -> tuple[list[dict], dict[str, dict[str, dict]]]:
     """Recursively find sidecar-driven LLM jobs ready to run.
 
     A job is ready when: a `<stem>.yaml`/`.yml` sidecar sits next to an
@@ -128,12 +130,17 @@ def _collect_llm_jobs(client: Client, remote_roots: list[str], tmp_dir: Path) ->
         tmp_dir: Local scratch directory for downloading sidecars.
 
     Returns:
-        List of job dicts: transcript_path, llm_dir, output_name, model,
-        prompt, context, remote_root (the folder this job's sidecar came
-        from — needed so prompt-template lookups check the right folder's
-        own `prompts/` subfolder first).
+        Tuple of (jobs, batch_folders):
+        - jobs: list of dicts (transcript_path, llm_dir, output_name, model,
+          prompt, context, remote_root — the folder this job's sidecar came
+          from, needed so prompt-template lookups check the right folder's
+          own `prompts/` subfolder first).
+        - batch_folders: {folder_path: batch_rows} for every folder that had
+          a batch.csv/batch.xlsx, used by `_build_prompt_tables` to build
+          per-prompt review tables after processing.
     """
     jobs: list[dict] = []
+    batch_folders: dict[str, dict[str, dict]] = {}
 
     def _walk(path: str, root: str) -> None:
         try:
@@ -159,6 +166,8 @@ def _collect_llm_jobs(client: Client, remote_roots: list[str], tmp_dir: Path) ->
             if Path(f["path"]).suffix.lower() in SIDECAR_SUFFIXES and Path(f["path"]).stem in audio_stems
         }
         batch_rows = _load_batch_rows(client, files, path, tmp_dir)
+        if batch_rows:
+            batch_folders[path] = batch_rows
         relevant_stems = (set(sidecars_by_stem) | set(batch_rows)) & audio_stems
 
         if relevant_stems:
@@ -238,7 +247,86 @@ def _collect_llm_jobs(client: Client, remote_roots: list[str], tmp_dir: Path) ->
 
     for root in remote_roots:
         _walk(root, root)
-    return jobs
+    return jobs, batch_folders
+
+
+def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str, dict], tmp_dir: Path) -> None:
+    """Build one llm/<prompt>_table.xlsx per distinct prompt used in this
+    folder's batch.csv/batch.xlsx.
+
+    Batch-input usability feature: a customer who uploaded many files via a
+    batch sheet gets one reviewable table per prompt instead of only
+    scattered individual .md files (which still exist, unchanged) — rows
+    are transcript stems (STT-model suffix included when `stt:` was a
+    list), columns are LLM models, cells are that (stem, model, prompt)
+    combination's output text (blank if not processed yet). Fully rebuilt
+    from whatever's actually in llm/ right now on every call — not
+    incrementally appended — so it's always a consistent snapshot even
+    across multiple partial runs. Only applies to batch-covered folders,
+    not plain per-file YAML sidecars.
+
+    Args:
+        client: WebDAV client.
+        folder_path: Remote folder that has the batch.csv/batch.xlsx.
+        batch_rows: {stem: row_dict}, as returned by `_load_batch_rows`.
+        tmp_dir: Local scratch directory for downloads/uploads.
+    """
+    transcript_dir = folder_path.rstrip("/") + f"/{TRANSCRIPT_SUBFOLDER}/"
+    llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
+    try:
+        existing_transcripts = {Path(f).stem for f in client.list(transcript_dir) if f.lower().endswith(".txt")}
+    except RemoteResourceNotFound:
+        existing_transcripts = set()
+    try:
+        existing_outputs = set(client.list(llm_dir))
+    except RemoteResourceNotFound:
+        existing_outputs = set()
+
+    # prompt -> transcript_stem -> model -> output filename (only entries that actually exist)
+    cells: dict[str, dict[str, dict[str, str]]] = {}
+    for stem, data in batch_rows.items():
+        parsed = _sidecar_from_dict(data)
+        stt_models = _stt_models_from_dict(data)
+        expected_stems = [stem] if not stt_models else [f"{stem}_{m}" for m in stt_models]
+        for transcript_stem in (s for s in expected_stems if s in existing_transcripts):
+            for model in parsed["models"]:
+                for prompt in parsed["prompts"]:
+                    output_name = f"{transcript_stem}_{model}_{prompt}.md"
+                    if output_name in existing_outputs:
+                        cells.setdefault(prompt, {}).setdefault(transcript_stem, {})[model] = output_name
+
+    if not cells:
+        return
+
+    from openpyxl import Workbook
+
+    for prompt, rows in cells.items():
+        models = sorted({model for row in rows.values() for model in row})
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["filename"] + models)
+        for transcript_stem in sorted(rows):
+            row_values = [transcript_stem]
+            for model in models:
+                output_name = rows[transcript_stem].get(model)
+                text = ""
+                if output_name:
+                    try:
+                        text = _download_text(client, llm_dir + output_name, tmp_dir)
+                    except Exception as exc:
+                        logger.error("Failed to download %s for %s_table.xlsx: %s", output_name, prompt, exc)
+                row_values.append(text)
+            ws.append(row_values)
+
+        local_path = tmp_dir / f"{prompt}_table.xlsx"
+        wb.save(local_path)
+        remote_out = llm_dir + f"{prompt}_table.xlsx"
+        try:
+            client.upload_sync(local_path=str(local_path), remote_path=remote_out)
+            logger.info("Uploaded %s", remote_out)
+        except Exception as exc:
+            logger.error("Upload failed for %s: %s", remote_out, exc)
+        local_path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -372,59 +460,64 @@ async def main() -> None:
     tmp_dir = Path(tempfile.mkdtemp(prefix="nc_llm_"))
     try:
         logger.info("Scanning %s for sidecar-driven LLM jobs...", remote_roots)
-        jobs = _collect_llm_jobs(client, remote_roots, tmp_dir)
+        jobs, batch_folders = _collect_llm_jobs(client, remote_roots, tmp_dir)
 
         if not jobs:
             logger.info("No LLM jobs ready to run.")
-            return
+        else:
+            logger.info("Found %d LLM job(s) to run.", len(jobs))
 
-        logger.info("Found %d LLM job(s) to run.", len(jobs))
+            # Group by model (stable sort keeps each model's jobs in their
+            # original crawl-discovery order) so consecutive calls to the same
+            # KubeAI-hosted model land within its scaleDownDelaySeconds warm
+            # window instead of round-robin-ing across models and forcing a
+            # cold start on every single call.
+            jobs.sort(key=lambda j: j["model"])
+            logger.info("Processing order (grouped by model): %s", [j["model"] for j in jobs][:50])
 
-        # Group by model (stable sort keeps each model's jobs in their
-        # original crawl-discovery order) so consecutive calls to the same
-        # KubeAI-hosted model land within its scaleDownDelaySeconds warm
-        # window instead of round-robin-ing across models and forcing a
-        # cold start on every single call.
-        jobs.sort(key=lambda j: j["model"])
-        logger.info("Processing order (grouped by model): %s", [j["model"] for j in jobs][:50])
+            prompt_cache: dict[str, str] = {}
+            timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                for job in tqdm(jobs, desc="Processing"):
+                    try:
+                        transcript = _download_text(client, job["transcript_path"], tmp_dir)
+                    except Exception as exc:
+                        logger.error("Failed to download transcript %s: %s", job["transcript_path"], exc)
+                        continue
 
-        prompt_cache: dict[str, str] = {}
-        timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for job in tqdm(jobs, desc="Processing"):
-                try:
-                    transcript = _download_text(client, job["transcript_path"], tmp_dir)
-                except Exception as exc:
-                    logger.error("Failed to download transcript %s: %s", job["transcript_path"], exc)
-                    continue
+                    try:
+                        template = _load_prompt_template(
+                            client, job["remote_root"], job["prompt"], tmp_dir, prompt_cache
+                        )
+                    except FileNotFoundError as exc:
+                        logger.error("%s Skipping %s.", exc, job["transcript_path"])
+                        continue
+                    prompt = _render_prompt(template, transcript, job["context"])
 
-                try:
-                    template = _load_prompt_template(
-                        client, job["remote_root"], job["prompt"], tmp_dir, prompt_cache
-                    )
-                except FileNotFoundError as exc:
-                    logger.error("%s Skipping %s.", exc, job["transcript_path"])
-                    continue
-                prompt = _render_prompt(template, transcript, job["context"])
+                    answer = await _call_llm(session, job["model"], prompt)
+                    if answer is None:
+                        continue
 
-                answer = await _call_llm(session, job["model"], prompt)
-                if answer is None:
-                    continue
+                    try:
+                        client.list(job["llm_dir"])
+                    except RemoteResourceNotFound:
+                        client.mkdir(job["llm_dir"])
 
-                try:
-                    client.list(job["llm_dir"])
-                except RemoteResourceNotFound:
-                    client.mkdir(job["llm_dir"])
+                    local_out = tmp_dir / job["output_name"]
+                    local_out.write_text(answer, encoding="utf-8")
+                    remote_out = job["llm_dir"] + job["output_name"]
+                    try:
+                        client.upload_sync(local_path=str(local_out), remote_path=remote_out)
+                        logger.info("Uploaded %s", remote_out)
+                    except Exception as exc:
+                        logger.error("Upload failed for %s: %s", remote_out, exc)
+                    local_out.unlink(missing_ok=True)
 
-                local_out = tmp_dir / job["output_name"]
-                local_out.write_text(answer, encoding="utf-8")
-                remote_out = job["llm_dir"] + job["output_name"]
-                try:
-                    client.upload_sync(local_path=str(local_out), remote_path=remote_out)
-                    logger.info("Uploaded %s", remote_out)
-                except Exception as exc:
-                    logger.error("Upload failed for %s: %s", remote_out, exc)
-                local_out.unlink(missing_ok=True)
+        # Rebuild batch-covered folders' per-prompt review tables regardless
+        # of whether this run had new jobs — keeps them a consistent
+        # snapshot of llm/ even on an otherwise-no-op run.
+        for folder_path, rows in batch_folders.items():
+            _build_prompt_tables(client, folder_path, rows, tmp_dir)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
