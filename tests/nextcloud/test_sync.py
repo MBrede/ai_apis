@@ -2,11 +2,17 @@
 Tests for sync.py's sidecar-driven multi-model STT and multi-folder helpers.
 """
 
+import openpyxl
+
 from src.nextcloud.sync import (
     _backend_for_stt_model,
     _make_webdav_client,
     _normalize_list,
     _parse_sidecar_stt,
+    _read_batch_csv,
+    _read_batch_xlsx,
+    _row_to_sidecar_dict,
+    _stt_models_from_dict,
 )
 
 
@@ -105,3 +111,113 @@ class TestMakeWebdavClientMultiFolder:
             "/remote.php/dav/files/user/a",
             "/remote.php/dav/files/user/b",
         ]
+
+
+class TestSttModelsFromDict:
+    """Test the dict-based core shared by _parse_sidecar_stt (YAML) and the batch-row path."""
+
+    def test_empty_dict_returns_empty_list(self):
+        assert _stt_models_from_dict({}) == []
+
+    def test_scalar_stt_returns_one_item_list(self):
+        assert _stt_models_from_dict({"stt": "turbo"}) == ["turbo"]
+
+    def test_list_stt_returned_as_is(self):
+        assert _stt_models_from_dict({"stt": ["turbo", "qwen3-asr-1.7b"]}) == ["turbo", "qwen3-asr-1.7b"]
+
+
+class TestRowToSidecarDict:
+    """Test converting one batch.csv/batch.xlsx row into the sidecar-dict shape."""
+
+    def test_empty_row_returns_empty_dict(self):
+        assert _row_to_sidecar_dict({}) == {}
+
+    def test_single_value_fields_become_one_item_lists(self):
+        row = {"stt": "turbo", "llm": "glm-4-7-flash", "prompt": "summary"}
+        assert _row_to_sidecar_dict(row) == {
+            "stt": ["turbo"],
+            "llm": ["glm-4-7-flash"],
+            "prompt": ["summary"],
+        }
+
+    def test_comma_separated_values_become_lists(self):
+        row = {"stt": "turbo, qwen3-asr-1.7b", "llm": "glm-4-7-flash,qwen3-14b"}
+        assert _row_to_sidecar_dict(row) == {
+            "stt": ["turbo", "qwen3-asr-1.7b"],
+            "llm": ["glm-4-7-flash", "qwen3-14b"],
+        }
+
+    def test_context_passed_through_as_plain_text_not_split(self):
+        row = {"context": "Case notes: patient reported dizziness, not nausea."}
+        assert _row_to_sidecar_dict(row) == {
+            "context": "Case notes: patient reported dizziness, not nausea."
+        }
+
+    def test_blank_and_missing_fields_omitted(self):
+        row = {"stt": "", "llm": "  ", "prompt": "summary", "context": None}
+        assert _row_to_sidecar_dict(row) == {"prompt": ["summary"]}
+
+
+class TestReadBatchCsv:
+    """Test reading a real batch.csv file end to end."""
+
+    def test_reads_rows_with_lowercased_headers(self, tmp_path):
+        csv_path = tmp_path / "batch.csv"
+        csv_path.write_text(
+            "Filename,STT,LLM,Prompt,Context\n"
+            "interview_1.m4a,turbo,glm-4-7-flash,summary,Case A\n"
+            "interview_2.m4a,\"turbo, qwen3-asr-1.7b\",glm-4-7-flash,summary,Case B\n",
+            encoding="utf-8",
+        )
+        rows = _read_batch_csv(csv_path)
+        assert rows == [
+            {
+                "filename": "interview_1.m4a",
+                "stt": "turbo",
+                "llm": "glm-4-7-flash",
+                "prompt": "summary",
+                "context": "Case A",
+            },
+            {
+                "filename": "interview_2.m4a",
+                "stt": "turbo, qwen3-asr-1.7b",
+                "llm": "glm-4-7-flash",
+                "prompt": "summary",
+                "context": "Case B",
+            },
+        ]
+
+
+class TestReadBatchXlsx:
+    """Test reading a real batch.xlsx file end to end."""
+
+    def test_reads_rows_with_lowercased_headers(self, tmp_path):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Filename", "STT", "LLM", "Prompt", "Context"])
+        ws.append(["interview_1.m4a", "turbo", "glm-4-7-flash", "summary", "Case A"])
+        xlsx_path = tmp_path / "batch.xlsx"
+        wb.save(xlsx_path)
+
+        rows = _read_batch_xlsx(xlsx_path)
+        assert rows == [
+            {
+                "filename": "interview_1.m4a",
+                "stt": "turbo",
+                "llm": "glm-4-7-flash",
+                "prompt": "summary",
+                "context": "Case A",
+            }
+        ]
+
+    def test_blank_trailing_row_skipped(self, tmp_path):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Filename", "Prompt"])
+        ws.append(["interview_1.m4a", "summary"])
+        ws.append([None, None])
+        xlsx_path = tmp_path / "batch.xlsx"
+        wb.save(xlsx_path)
+
+        rows = _read_batch_xlsx(xlsx_path)
+        assert len(rows) == 1

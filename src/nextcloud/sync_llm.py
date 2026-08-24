@@ -3,15 +3,18 @@ Nextcloud transcript LLM post-processing.
 
 Scans one or more configured Nextcloud folders (recursively, comma-separated
 in NEXTCLOUD_FOLDER) for audio/video files that have an optional
-`<stem>.yaml` sidecar next to them. Once the whisper job (``sync.py``) has
-produced a matching transcript, the sidecar's `llm:` and `prompt:` fields
-(each a single model/prompt name or a list) are expanded into the CARTESIAN
-PRODUCT of every listed prompt against every listed model, each run against
-a hosted KubeAI LLM. If the sidecar's `stt:` field requested multiple STT
-models, EVERY transcript variant (`transcriptions/<stem>_<sttmodel>.txt`) is
-processed independently — the result is uploaded to a sibling ``llm/``
-folder as ``<transcript_stem>_<model>_<prompt>.md``, i.e. the STT model (if
-any) is folded into the filename automatically since it's already part of
+`<stem>.yaml` sidecar next to them, OR a matching row in that folder's
+`batch.csv`/`batch.xlsx` (same fields, one row per file — see
+`_load_batch_rows` in sync.py; a sidecar always wins over a matching batch
+row). Once the whisper job (``sync.py``) has produced a matching
+transcript, the `llm:` and `prompt:` fields (each a single model/prompt
+name or a list) are expanded into the CARTESIAN PRODUCT of every listed
+prompt against every listed model, each run against a hosted KubeAI LLM. If
+`stt:` requested multiple STT models, EVERY transcript variant
+(`transcriptions/<stem>_<sttmodel>.txt`) is processed independently — the
+result is uploaded to a sibling ``llm/`` folder as
+``<transcript_stem>_<model>_<prompt>.md``, i.e. the STT model (if any) is
+folded into the filename automatically since it's already part of
 `<transcript_stem>`. An optional `context:` field is injected into prompt
 templates via a `{context}` placeholder (same plain-string-replace
 mechanism as `{transcript}`).
@@ -21,7 +24,7 @@ consecutive calls to the same KubeAI-hosted model land within its
 scaleDownDelaySeconds warm window, avoiding repeated cold starts.
 
 Fully independent of the whisper job — no audio download, no diarization, no
-Whisper calls. Files without a sidecar are never touched.
+Whisper calls. Files with neither a sidecar nor a batch row are never touched.
 
 All configuration is read from environment variables (see README_llm.md).
 """
@@ -41,9 +44,10 @@ from src.nextcloud.sync import (
     AUDIO_VIDEO_MIME_TYPES,
     SIDECAR_SUFFIXES,
     _download_text,
+    _load_batch_rows,
     _make_webdav_client,
     _normalize_list,
-    _parse_sidecar_stt,
+    _stt_models_from_dict,
 )
 from tqdm import tqdm
 from webdav3.client import Client
@@ -67,40 +71,56 @@ DEFAULT_PROMPT = "summary"
 # ---------------------------------------------------------------------------
 
 
-def _parse_sidecar(text: str) -> dict:
-    """Parse a sidecar YAML's content into normalized model/prompt lists + context.
+def _sidecar_from_dict(data: dict) -> dict:
+    """Normalize an already-parsed sidecar/batch-row dict into model/prompt lists + context.
 
-    An empty file (or a file with fields omitted) falls back to a 1-element
-    ``[LLM_DEFAULT_MODEL]`` / ``[DEFAULT_PROMPT]``. `stt:` is intentionally
-    ignored here — that field belongs to sync.py's whisper stage.
+    Shared core of `_parse_sidecar` (YAML sidecar) and the batch-file path
+    (`_load_batch_rows` in sync.py already produces this dict shape
+    directly, no YAML round-trip needed).
 
-    Args:
-        text: Raw YAML file contents.
+    An empty dict (or one with fields omitted) falls back to a 1-element
+    ``[LLM_DEFAULT_MODEL]`` / ``[DEFAULT_PROMPT]``. `stt` is intentionally
+    ignored here — that field belongs to sync.py's whisper stage (see
+    `_stt_models_from_dict`).
 
     Returns:
         Dict with keys "models" (list[str]), "prompts" (list[str]), and
         "context" (str, empty if absent).
     """
-    data = yaml.safe_load(text) or {}
     models = _normalize_list(data.get("llm")) or [os.environ.get("LLM_DEFAULT_MODEL", "glm-4-7-flash")]
     prompts = _normalize_list(data.get("prompt")) or [DEFAULT_PROMPT]
     context = str(data.get("context") or "")
     return {"models": models, "prompts": prompts, "context": context}
 
 
+def _parse_sidecar(text: str) -> dict:
+    """Parse a sidecar YAML's content into normalized model/prompt lists + context.
+
+    Args:
+        text: Raw YAML file contents.
+
+    Returns:
+        See `_sidecar_from_dict`.
+    """
+    return _sidecar_from_dict(yaml.safe_load(text) or {})
+
+
 def _collect_llm_jobs(client: Client, remote_roots: list[str], tmp_dir: Path) -> list[dict]:
     """Recursively find sidecar-driven LLM jobs ready to run.
 
     A job is ready when: a `<stem>.yaml`/`.yml` sidecar sits next to an
-    audio/video file, at least one `transcriptions/<stem>[_<sttmodel>].txt`
-    already exists, and `llm/<transcript_stem>_<model>_<prompt>.md` does not
-    exist yet. Every existing transcript variant for the stem is processed
-    independently — a sidecar with `stt: [turbo, qwen3-asr-1.7b]` produces
-    two full llm x prompt batches, one per STT model's transcript, each
-    named after that transcript's own stem (so the STT model is folded into
-    the output filename automatically). Each batch is the cartesian product
-    of the sidecar's `llm:` models × `prompt:` prompts (each field may be a
-    single name or a list — see `_parse_sidecar`).
+    audio/video file (or, absent that, the file has a matching row in this
+    folder's batch.csv/batch.xlsx — see `_load_batch_rows` in sync.py; a
+    sidecar always wins over a matching batch row), at least one
+    `transcriptions/<stem>[_<sttmodel>].txt` already exists, and
+    `llm/<transcript_stem>_<model>_<prompt>.md` does not exist yet. Every
+    existing transcript variant for the stem is processed independently —
+    `stt: [turbo, qwen3-asr-1.7b]` produces two full llm x prompt batches,
+    one per STT model's transcript, each named after that transcript's own
+    stem (so the STT model is folded into the output filename
+    automatically). Each batch is the cartesian product of `llm:` models ×
+    `prompt:` prompts (each field may be a single name or a list — see
+    `_sidecar_from_dict`).
 
     Args:
         client: WebDAV client.
@@ -133,13 +153,15 @@ def _collect_llm_jobs(client: Client, remote_roots: list[str], tmp_dir: Path) ->
         audio_stems = {
             Path(f["path"]).stem for f in files if f.get("content_type", "") in AUDIO_VIDEO_MIME_TYPES
         }
-        sidecars = [
-            f
+        sidecars_by_stem = {
+            Path(f["path"]).stem: f["path"]
             for f in files
             if Path(f["path"]).suffix.lower() in SIDECAR_SUFFIXES and Path(f["path"]).stem in audio_stems
-        ]
+        }
+        batch_rows = _load_batch_rows(client, files, path, tmp_dir)
+        relevant_stems = (set(sidecars_by_stem) | set(batch_rows)) & audio_stems
 
-        if sidecars:
+        if relevant_stems:
             transcript_dir = path.rstrip("/") + f"/{TRANSCRIPT_SUBFOLDER}/"
             try:
                 # .txt only — every transcript has a matching .srt with the
@@ -156,26 +178,31 @@ def _collect_llm_jobs(client: Client, remote_roots: list[str], tmp_dir: Path) ->
             except RemoteResourceNotFound:
                 existing_outputs = set()
 
-            for sidecar in sidecars:
-                stem = Path(sidecar["path"]).stem
+            for stem in relevant_stems:
+                sidecar_path = sidecars_by_stem.get(stem)
+                if sidecar_path:
+                    try:
+                        text = _download_text(client, sidecar_path, tmp_dir)
+                    except Exception as exc:
+                        logger.error("Failed to download sidecar %s: %s", sidecar_path, exc)
+                        continue
+                    data = yaml.safe_load(text) or {}
+                else:
+                    # No per-file sidecar — fall back to this folder's batch.csv/batch.xlsx row.
+                    data = batch_rows[stem]
 
-                try:
-                    text = _download_text(client, sidecar["path"], tmp_dir)
-                except Exception as exc:
-                    logger.error("Failed to download sidecar %s: %s", sidecar["path"], exc)
-                    continue
-                parsed = _parse_sidecar(text)
+                parsed = _sidecar_from_dict(data)
 
-                # A sidecar's `stt:` field can produce several transcripts for
-                # one audio file: the bare `<stem>.txt` (no `stt:` — default,
-                # unsuffixed) or `<stem>_<model>.txt` per listed STT model.
-                # Derive the expected stems from the SIDECAR itself, not by
-                # guessing from the folder listing — a naive `startswith`
+                # `stt` can produce several transcripts for one audio file:
+                # the bare `<stem>.txt` (no `stt` — default, unsuffixed) or
+                # `<stem>_<model>.txt` per listed STT model. Derive the
+                # expected stems from the sidecar/batch-row data itself, not
+                # by guessing from the folder listing — a naive `startswith`
                 # match against every transcript stem in the directory is
                 # ambiguous (e.g. "interview_2" is a different audio file's
                 # transcript per the speaker-count filename convention in
                 # sync.py, not an "interview" file with stt-suffix "2").
-                stt_models = _parse_sidecar_stt(text)
+                stt_models = _stt_models_from_dict(data)
                 expected_stems = [stem] if not stt_models else [f"{stem}_{m}" for m in stt_models]
                 transcript_stems = [s for s in expected_stems if s in existing_transcripts]
                 if not transcript_stems:

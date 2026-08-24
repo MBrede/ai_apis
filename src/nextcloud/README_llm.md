@@ -98,6 +98,34 @@ skippable/rerunnable, and the `context` text is available to all 8 LLM
 calls via `{context}`. This lets you directly compare how STT choice
 affects downstream summary quality, not just how LLM/prompt choice does.
 
+## Batch file (alternative to per-file YAML)
+
+For a folder with many files that each need their own config, a single
+`batch.csv` or `batch.xlsx` in that folder can replace hand-authoring one
+`<stem>.yaml` per file — same fields, one **row per file** instead of one
+file per row:
+
+| filename | stt | llm | prompt | context |
+|---|---|---|---|---|
+| `interview_01.mp3` | `turbo, qwen3-asr-1.7b` | `glm-4-7-flash` | `summary, action-items` | `Weekly Benkana project sync — focus on blockers.` |
+| `interview_02.mp3` | `turbo` | `glm-4-7-flash, qwen3-14b` | `summary` | `Kickoff call, no prior context.` |
+
+- **`filename`** matches against the audio/video file's name in the same
+  folder — with or without extension (`interview_01` and `interview_01.mp3`
+  both match `interview_01.mp3`).
+- `stt`/`llm`/`prompt` are comma-separated lists within a cell (same
+  cartesian-product semantics as the YAML `stt:`/`llm:`/`prompt:` lists).
+  `context` is free text, not split.
+- Column headers are case-insensitive; `file` is also accepted for `filename`.
+- Both `.csv` and `.xlsx` are supported. If both exist in the same folder,
+  `batch.xlsx` wins and `batch.csv` is ignored.
+- **A file's own `<stem>.yaml` always wins over a matching batch row** — the
+  batch file only covers files that don't have their own sidecar. This lets
+  you hand a customer's spreadsheet-driven folder an individual override for
+  one file without touching the batch file.
+- A file with neither a sidecar nor a batch row is untouched by this
+  section — plain default transcription only (see "How it works" above).
+
 ## Available LLMs
 
 Any model currently `enabled: true` in `llm/models-values.yaml` (KubeAI's

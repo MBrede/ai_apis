@@ -13,6 +13,13 @@ in that case the file is transcribed once per listed model, with output
 suffixed `<stem>_<model>.{txt,srt}` and skipped independently per model. See
 README_llm.md for the full sidecar schema (shared with sync_llm.py).
 
+A folder-level `batch.csv`/`batch.xlsx` (one row per file, same fields as
+the per-file YAML sidecar: `filename`, `stt`, `llm`, `prompt`, `context`,
+list-valued fields comma-separated within a cell) covers every file in that
+folder that has no `<stem>.yaml` of its own — a customer-facing batch
+alternative to hand-authoring one YAML per file. A file's own sidecar
+always wins over a matching batch row.
+
 All configuration is read from environment variables (see README_cron.md).
 """
 
@@ -64,6 +71,8 @@ AUDIO_VIDEO_MIME_TYPES: frozenset[str] = frozenset(
 
 TRANSCRIPT_SUBFOLDER = "transcriptions"
 SIDECAR_SUFFIXES = (".yaml", ".yml")
+BATCH_FILENAMES = ("batch.xlsx", "batch.csv")  # checked in this order; first match wins
+BATCH_ROW_LIST_FIELDS = ("stt", "llm", "prompt")
 QWEN_MODEL_PREFIX = "qwen3-asr"
 ARK_MODEL_PREFIX = "ark-asr"
 HOJO_MODEL_PREFIX = "hojo-asr"
@@ -189,6 +198,21 @@ def _download_text(client: Client, remote_path: str, tmp_dir: Path) -> str:
         local_path.unlink(missing_ok=True)
 
 
+def _stt_models_from_dict(data: dict) -> list[str]:
+    """Return the STT models requested by a parsed sidecar/batch-row dict's `stt` field.
+
+    Shared core of `_parse_sidecar_stt` (YAML sidecar) and the batch-file
+    path (`_load_batch_rows` already produces this dict shape directly, no
+    YAML round-trip needed).
+
+    Returns:
+        List of requested model names. Empty means "no opt-in" — callers
+        should fall back to the WHISPER_MODEL-env default with unsuffixed
+        output (today's behavior).
+    """
+    return _normalize_list(data.get("stt"))
+
+
 def _parse_sidecar_stt(text: str) -> list[str]:
     """Return the STT models requested by a sidecar's `stt:` field.
 
@@ -200,8 +224,107 @@ def _parse_sidecar_stt(text: str) -> list[str]:
         callers should fall back to the WHISPER_MODEL-env default with
         unsuffixed output (today's behavior).
     """
-    data = yaml.safe_load(text) or {}
-    return _normalize_list(data.get("stt"))
+    return _stt_models_from_dict(yaml.safe_load(text) or {})
+
+
+def _row_to_sidecar_dict(row: dict[str, str]) -> dict:
+    """Convert one batch.csv/batch.xlsx row into the same dict shape
+    `yaml.safe_load()` produces for an equivalent per-file YAML sidecar.
+
+    Args:
+        row: Column name -> cell value (both already lowercased/stripped by
+            the caller). `stt`/`llm`/`prompt` are comma-split into lists;
+            `context` is passed through as free text.
+
+    Returns:
+        Dict with only the keys that had a non-empty cell — same convention
+        `_stt_models_from_dict`/sync_llm.py's `_sidecar_from_dict` already
+        expect from `data.get(key)` returning `None` for an absent field.
+    """
+    result: dict = {}
+    for field in BATCH_ROW_LIST_FIELDS:
+        value = (row.get(field) or "").strip()
+        if value:
+            result[field] = [v.strip() for v in value.split(",") if v.strip()]
+    context = (row.get("context") or "").strip()
+    if context:
+        result["context"] = context
+    return result
+
+
+def _load_batch_rows(client: Client, files: list[dict], remote_dir: str, tmp_dir: Path) -> dict[str, dict]:
+    """Find and parse a folder-level batch.csv/batch.xlsx, if present.
+
+    One row per file (matched by a `filename` column against each audio
+    file's stem, extension optional), same fields as the per-file YAML
+    sidecar. Lets a customer hand over one spreadsheet instead of
+    authoring a `<stem>.yaml` per file — see this module's docstring.
+
+    Args:
+        client: WebDAV client.
+        files: File-info dicts for this directory (from `client.list(..., get_info=True)`).
+        remote_dir: Directory path these files live in (for logging only).
+        tmp_dir: Local scratch directory for the temporary download.
+
+    Returns:
+        `{stem: row_dict}`, `row_dict` in the same shape `_row_to_sidecar_dict`
+        returns. Empty dict if no batch file is present in this folder.
+    """
+    batch_file = next(
+        (f for name in BATCH_FILENAMES for f in files if Path(f["path"]).name.lower() == name),
+        None,
+    )
+    if batch_file is None:
+        return {}
+
+    local_path = tmp_dir / Path(batch_file["path"]).name
+    client.download_sync(remote_path=batch_file["path"], local_path=str(local_path))
+    try:
+        suffix = local_path.suffix.lower()
+        if suffix == ".xlsx":
+            rows = _read_batch_xlsx(local_path)
+        else:
+            rows = _read_batch_csv(local_path)
+    except Exception as exc:
+        logger.error("Failed to read batch file %s in %s: %s", batch_file["path"], remote_dir, exc)
+        return {}
+    finally:
+        local_path.unlink(missing_ok=True)
+
+    batch_rows: dict[str, dict] = {}
+    for row in rows:
+        filename = (row.get("filename") or row.get("file") or "").strip()
+        if not filename:
+            continue
+        batch_rows[Path(filename).stem] = _row_to_sidecar_dict(row)
+    return batch_rows
+
+
+def _read_batch_csv(local_path: Path) -> list[dict[str, str]]:
+    """Read a batch.csv into a list of {lowercased column name: cell value} dicts."""
+    import csv
+
+    with open(local_path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        return [{(k or "").strip().lower(): (v or "") for k, v in row.items()} for row in reader]
+
+
+def _read_batch_xlsx(local_path: Path) -> list[dict[str, str]]:
+    """Read a batch.xlsx into a list of {lowercased column name: cell value} dicts."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(local_path, read_only=True, data_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+    try:
+        headers = [str(h or "").strip().lower() for h in next(rows_iter)]
+    except StopIteration:
+        return []
+    return [
+        {headers[i]: ("" if v is None else str(v)) for i, v in enumerate(row) if i < len(headers)}
+        for row in rows_iter
+        if any(v is not None for v in row)
+    ]
 
 
 def _backend_for_stt_model(model: str) -> str:
@@ -251,13 +374,15 @@ def _ensure_transcript_folder(client: Client, remote_dir: str) -> str:
 def _collect_new_files(client: Client, remote_roots: list[str], tmp_dir: Path) -> list[dict]:
     """Recursively find audio/video work items that still need transcription.
 
-    Each returned item is one (file, STT model) pair. A file with no sidecar,
-    or a sidecar with no `stt:` field, yields exactly one item with
-    `stt_model=None` — today's behavior: single WHISPER_MODEL-env-default
-    transcription, unsuffixed `<stem>.{txt,srt}` output, skipped if `<stem>`
-    already has a transcript. A file with a sidecar `stt: [m1, m2, ...]`
-    yields one item per listed model, each independently skippable via its
-    own `<stem>_<model>.{txt,srt}` output.
+    Each returned item is one (file, STT model) pair. A file with no sidecar
+    and no matching batch.csv/batch.xlsx row, or a sidecar/row with no
+    `stt:`/`stt` field, yields exactly one item with `stt_model=None` —
+    today's behavior: single WHISPER_MODEL-env-default transcription,
+    unsuffixed `<stem>.{txt,srt}` output, skipped if `<stem>` already has a
+    transcript. A file with `stt: [m1, m2, ...]` (own sidecar, or a batch
+    row if it has no sidecar of its own — see `_load_batch_rows`) yields one
+    item per listed model, each independently skippable via its own
+    `<stem>_<model>.{txt,srt}` output.
 
     Args:
         client: WebDAV client.
@@ -287,6 +412,7 @@ def _collect_new_files(client: Client, remote_roots: list[str], tmp_dir: Path) -
                 for f in files
                 if Path(f["path"]).suffix.lower() in SIDECAR_SUFFIXES and Path(f["path"]).stem in audio_stems
             }
+            batch_rows = _load_batch_rows(client, files, path, tmp_dir)
 
             transcript_dir = path.rstrip("/") + f"/{TRANSCRIPT_SUBFOLDER}/"
             try:
@@ -304,6 +430,9 @@ def _collect_new_files(client: Client, remote_roots: list[str], tmp_dir: Path) -
                         stt_models = _parse_sidecar_stt(text)
                     except Exception as exc:
                         logger.error("Failed to read sidecar %s: %s", sidecar_path, exc)
+                elif stem in batch_rows:
+                    # No per-file sidecar — fall back to this folder's batch.csv/batch.xlsx row.
+                    stt_models = _stt_models_from_dict(batch_rows[stem])
 
                 if not stt_models:
                     # No sidecar, or sidecar has no `stt:` — today's default behavior.
