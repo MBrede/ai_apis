@@ -45,7 +45,7 @@ class WhisperXBuffer(DiarizingASRBuffer):
         self.compute_type: str = "float16" if self.device == "cuda" else "int8"
         self._align_cache: dict = {}  # language_code -> (align_model, metadata)
 
-    def load_model(self, model_name: str, timeout: int = 300):
+    def load_model(self, model_name: str, timeout: int = 60):
         """Load WhisperX transcription model with automatic unloading after timeout."""
         if self.is_loaded() and self.model_name == model_name:
             self.reset_timer(timeout)

@@ -75,22 +75,54 @@ whisper-only = [
     # AutoModelForCausalLM(trust_remote_code=True)) and Granite-Speech-4.1
     # backend (GraniteSpeechBuffer, AutoModelForSpeechSeq2Seq) — floor raised
     # to >=5.8 for Granite per https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus
-    # (2026-08-21). NOTE: this makes `ai-apis[apis]`/`ai-apis[all]` (which
-    # combine whisper-only with text-analysis-only's pinned transformers==4.57.6)
-    # unsatisfiable as a combo — neither extra is used together by any
-    # Dockerfile in this repo (whisper and text-analysis are separate
-    # containers), so this is accepted fallout, not fixed here.
+    # (2026-08-21).
     "transformers>=5.8",
     "accelerate>=1.2.1",  # required for AutoModel*.from_pretrained(device_map=...) — ArkASRBuffer/GraniteSpeechBuffer
     "librosa>=0.10.0",  # required by NemotronASRBuffer's transformers.pipeline() feature extractor
+]
+
+# Qwen3-ASR-1.7B backend, split into its own container (2026-08-24) — the
+# `qwen-asr` PyPI package pins transformers==4.57.6, genuinely incompatible
+# with whisper-only's transformers>=5.8 (confirmed: qwen-asr's own vendored
+# model code fails to import against transformers>=5.8, not just a strict
+# metadata pin — see Qwen3ASRBuffer's module docstring). Deployed as
+# ai-apis-whisper-qwen3asr, proxied to from the primary whisper container.
+whisper-qwen3asr-only = [
+    "whisperx>=3.8.5",
+    "pyannote-audio>=4.0.1",
+    "transformers==4.57.6",
+    "qwen-asr",
+    "python-multipart>=0.0.20",  # FastAPI UploadFile/Form handling for /transcribe_and_diarize/
+]
+
+# Hojo-ASR-V1 backend, split into its own container (2026-08-24) — the
+# `hojo-asr` PyPI package pins torch<2.6, genuinely incompatible with
+# ml-base's torch>=2.6.0 (shared by every other backend). Must build from
+# the from-scratch Dockerfile.whisper-hojoasr, NOT a pre-built base image —
+# mbrede/ai-apis-base already has torch>=2.6.0 baked in, too late to
+# downgrade once inherited. Deployed as ai-apis-whisper-hojoasr, proxied to
+# from the primary whisper container.
+whisper-hojoasr-only = [
+    # torch/numpy declared here directly instead of via the shared ml-base
+    # extra — ml-base pins torch>=2.6.0, incompatible with hojo-asr's own
+    # torch<2.6. Dockerfile.whisper-hojoasr must NOT be built from
+    # mbrede/ai-apis-base (already has torch>=2.6.0 baked in); build from
+    # scratch instead, same shape as Dockerfile.whisper.
+    # hojo-asr itself declares torch>=2.5.1,<2.6 / torchaudio>=2.5.1,<2.6 —
+    # this container's whole point is honoring that, not something chosen here.
+    "torch>=2.5.1,<2.6",
+    "torchaudio>=2.5.1,<2.6",
+    "numpy>=2.2.1",
+    # whisperx>=3.8.2 all pin torch~=2.8.0/>=2.7.1 — incompatible.
+    # 3.4.5/3.3.6 (the newest with no such floor) only need torch>=2.5.1.
+    "whisperx>=3.4.5,<3.5",
+    # pyannote-audio>=4.0.1 requires torch>=2.8.0 in every release — capped
+    # to the 3.x line here, which only needs torch>=2.0.0, compatible with
+    # hojo-asr's torch<2.6.
+    "pyannote-audio>=3.1,<4.0",
     "soundfile>=0.12.1",  # HojoASRBuffer writes diarize-turn slices to temp wav files
-    # Qwen3-ASR backend (whisper_api.py's Qwen3ASRBuffer) and Hojo-ASR-V1
-    # backend (HojoASRBuffer) are intentionally NOT listed here — `qwen-asr`
-    # pins transformers==4.57.6 (conflicts with the >=5.8 floor above) and
-    # `hojo-asr` pins torch<2.6 (conflicts with this project's torch>=2.6.0,
-    # ml-base, shared by every other GPU workload in this container). Both
-    # installed with --no-deps in Dockerfile.whisper/Dockerfile.whisper.hub
-    # instead; see those files' comments.
+    "hojo-asr",
+    "python-multipart>=0.0.20",  # FastAPI UploadFile/Form handling for /transcribe_and_diarize/
 ]
 
 text-analysis-only = [
@@ -107,6 +139,15 @@ stable-diffusion = [
 
 whisper = [
     "ai-apis[api-core,ml-base,whisper-only]",
+]
+
+whisper-qwen3asr = [
+    "ai-apis[api-core,ml-base,whisper-qwen3asr-only]",
+]
+
+# No ml-base here — whisper-hojoasr-only declares its own torch<2.6.
+whisper-hojoasr = [
+    "ai-apis[api-core,whisper-hojoasr-only]",
 ]
 
 text-analysis = [
@@ -177,27 +218,37 @@ all = [
 ]
 
 [tool.uv]
-# whisper/whisper-only need transformers>=5.8 (Granite-Speech backend).
-# text-analysis(-only) hard-pins transformers==4.57.6, and llm-training/all
-# transitively cap it via unsloth's own upper bound — genuinely incompatible
-# versions of the same package. No Dockerfile in this repo ever installs
-# whisper alongside any of these (separate containers), but uv's
-# project-wide lock resolves every declared top-level extra into ONE mutual
-# solution by default, regardless of whether anything actually combines
-# them — so `uv run`/`uv lock` fails outright without this. Declaring each
-# pair conflicting splits the resolution into per-extra forks instead. Full
-# cross product of {whisper, whisper-only} x {the four conflicting extras}
-# is listed because uv doesn't infer conflicts transitively through a
-# wrapper extra (e.g. `whisper` including `whisper-only`).
+# Every extra listed below pins a mutually incompatible version of
+# transformers or torch against at least one other: whisper(-only) needs
+# transformers>=5.8 (Granite-Speech), whisper-qwen3asr(-only) needs
+# transformers==4.57.6 exactly (qwen-asr's own vendored code, confirmed
+# broken against >=5.8), whisper-hojoasr(-only) needs torch<2.6 (hojo-asr),
+# text-analysis(-only) hard-pins transformers==4.57.6 with a different
+# rationale, and llm-training/all transitively cap transformers via
+# unsloth's own upper bound. No Dockerfile in this repo ever installs two
+# of these together (each is its own container), but uv's project-wide
+# lock resolves every declared top-level extra into ONE mutual solution by
+# default regardless of whether anything actually combines them — so
+# `uv run`/`uv lock` fails outright without this. A single conflict group
+# (not pairwise entries) declares "at most one of these may be selected at
+# once", which is exactly the real-world constraint.
 conflicts = [
-    [{ extra = "whisper-only" }, { extra = "text-analysis-only" }],
-    [{ extra = "whisper-only" }, { extra = "text-analysis" }],
-    [{ extra = "whisper-only" }, { extra = "llm-training" }],
-    [{ extra = "whisper-only" }, { extra = "all" }],
-    [{ extra = "whisper" }, { extra = "text-analysis-only" }],
-    [{ extra = "whisper" }, { extra = "text-analysis" }],
-    [{ extra = "whisper" }, { extra = "llm-training" }],
-    [{ extra = "whisper" }, { extra = "all" }],
+    [
+        { extra = "whisper-only" },
+        { extra = "whisper" },
+        { extra = "whisper-qwen3asr-only" },
+        { extra = "whisper-qwen3asr" },
+        { extra = "whisper-hojoasr-only" },
+        { extra = "whisper-hojoasr" },
+        { extra = "ml-base" },
+        { extra = "stable-diffusion-only" },
+        { extra = "stable-diffusion" },
+        { extra = "text-analysis-only" },
+        { extra = "text-analysis" },
+        { extra = "llm-training" },
+        { extra = "apis" },
+        { extra = "all" },
+    ],
 ]
 
 [project.urls]

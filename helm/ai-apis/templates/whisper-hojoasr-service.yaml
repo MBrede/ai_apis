@@ -1,0 +1,69 @@
+# Internal-only — no ingress. Reached via the primary whisper container's
+# WHISPER_PROXY_URL_HOJO_ASR (see whisper-deployment.yaml).
+{{- if .Values.keda.enabled }}
+# ── KEDA mode: app service (ClusterIP to pods, internal name) ────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-whisper-hojoasr-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whisper-hojoasr
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.whisperHojoasr.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "ai-apis.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: whisper-hojoasr
+---
+# ── KEDA mode: interceptor service (ExternalName → KEDA interceptor proxy) ───
+# The proxy URL the primary whisper container calls still resolves to this
+# same service name; the interceptor queues the request and scales the
+# deployment 0→1 before forwarding it to the -app service above.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-whisper-hojoasr
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whisper-hojoasr
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+{{- else }}
+# ── Normal mode: direct ClusterIP service ────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-whisper-hojoasr
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-apis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whisper-hojoasr
+  annotations:
+    helm.sh/chart: {{ include "ai-apis.chart" . }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.whisperHojoasr.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "ai-apis.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: whisper-hojoasr
+{{- end }}

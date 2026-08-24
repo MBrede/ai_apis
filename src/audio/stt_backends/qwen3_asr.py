@@ -42,7 +42,7 @@ class Qwen3ASRBuffer(AlignThenDiarizeASRBuffer):
         super().__init__()
         self.model_name: str = None
 
-    def load_model(self, model_name: str = QWEN_ASR_REPO, timeout: int = 300):
+    def load_model(self, model_name: str = QWEN_ASR_REPO, timeout: int = 60):
         """Load Qwen3-ASR (+ bundled forced aligner) with automatic unloading after timeout."""
         if self.is_loaded() and self.model_name == model_name:
             self.reset_timer(timeout)

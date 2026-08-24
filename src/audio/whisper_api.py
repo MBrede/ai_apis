@@ -6,17 +6,30 @@ backend, shared base classes for the two common shapes — see
 `stt_backends/base.py`). This file is just the FastAPI routing layer:
 endpoints, request/response shaping, and legacy per-segment orchestration.
 
+This SAME file runs in three separate containers (ai-apis-whisper,
+ai-apis-whisper-qwen3asr, ai-apis-whisper-hojoasr) — see pyproject.toml's
+whisper-only/whisper-qwen3asr-only/whisper-hojoasr-only extras. Some
+backends have genuinely conflicting dependency pins (qwen-asr needs
+transformers==4.57.6, hojo-asr needs torch<2.6, Granite-Speech/ARK-ASR need
+transformers>=5.8) that can't coexist in one environment, so each container
+only installs (and only runs in-process) a subset of backends, controlled
+by the WHISPER_LOCAL_BACKENDS env var. A request for a backend this
+container doesn't run locally is proxied to whichever other container does,
+via WHISPER_PROXY_URL_<BACKEND> env vars — see `_proxy_transcribe_and_diarize`.
+
 To start:
     gunicorn whisper_api:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 -t 30000
 """
 
 import asyncio
+import json
 import logging
 import os
 import subprocess
 import tempfile
 from collections import Counter
 
+import aiohttp
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -27,9 +40,62 @@ from src.audio.stt_backends import (
     whisper_buffer,
 )
 from src.core.app_factory import create_app
+from src.core.auth import build_auth_headers
 from src.core.auth_dependencies import verify_api_key
+from src.core.config import config
 
 logger = logging.getLogger(__name__)
+
+# Which backends this container runs in-process. Defaults to "everything"
+# (today's single-container behavior) so nothing breaks for a deployment
+# that doesn't set this — each split container overrides it explicitly.
+# "whisper" is the legacy pyannote+ffmpeg+plain-whisper fallback, not in
+# BACKEND_REGISTRY (see diarize_audio below), so it's included by default here too.
+LOCAL_BACKENDS: set[str] = {
+    b.strip()
+    for b in os.environ.get(
+        "WHISPER_LOCAL_BACKENDS", ",".join(BACKEND_REGISTRY) + ",whisper"
+    ).split(",")
+    if b.strip()
+}
+
+
+def _proxy_url_env_var(backend: str) -> str:
+    return f"WHISPER_PROXY_URL_{backend.upper().replace('-', '_')}"
+
+
+# Backends not run locally, with a configured URL to proxy them to. A
+# backend that's neither local nor proxied is simply unavailable (404) —
+# e.g. a dev container that only wants a subset without wiring up the rest.
+PROXY_URLS: dict[str, str] = {
+    name: url
+    for name in BACKEND_REGISTRY
+    if name not in LOCAL_BACKENDS and (url := os.environ.get(_proxy_url_env_var(name)))
+}
+
+
+async def _proxy_transcribe_and_diarize(target_url: str, file_path: str, params: dict) -> dict:
+    """Forward a /transcribe_and_diarize/ request to another whisper-* container and relay its JSON response verbatim.
+
+    The remote container applies its own filter_transcription_chunks (same
+    params forwarded through), so the response is returned as-is — no
+    local re-filtering.
+    """
+    timeout = aiohttp.ClientTimeout(total=int(os.environ.get("WHISPER_PROXY_TIMEOUT", "1800")))
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        with open(file_path, "rb") as fh:
+            form = aiohttp.FormData()
+            form.add_field("file", fh, filename=os.path.basename(file_path))
+            async with session.post(
+                f"{target_url.rstrip('/')}/transcribe_and_diarize/",
+                params=params,
+                data=form,
+                headers=build_auth_headers(config.API_KEY),
+            ) as resp:
+                body = await resp.read()
+                if not (200 <= resp.status < 400):
+                    raise HTTPException(status_code=resp.status, detail=body.decode(errors="replace"))
+                return json.loads(body)
 
 
 def _words_per_second(text: str, duration: float) -> float:
@@ -194,7 +260,7 @@ async def transcribe_diarize(
         f.write(file_contents)
 
     try:
-        if backend in BACKEND_REGISTRY:
+        if backend in BACKEND_REGISTRY and backend in LOCAL_BACKENDS:
             buf = BACKEND_REGISTRY[backend]
             if include_fillers and backend != "whisperx":
                 logger.warning("include_fillers has no effect with backend=%s — ignoring.", backend)
@@ -210,7 +276,11 @@ async def transcribe_diarize(
                 align=align,
                 initial_prompt=filler_prompt if backend == "whisperx" else None,
             )
-        else:
+            os.remove(file.filename)
+            answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
+            return {"answer": answer, "backend": backend, "removed_chunks": len(chunks) - len(answer)}
+
+        elif backend == "whisper" and "whisper" in LOCAL_BACKENDS:
             if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
                 logger.info(f"Loading Whisper model on request: {model_to_use}")
                 await asyncio.to_thread(whisper_buffer.load_model, model_to_use)
@@ -226,10 +296,38 @@ async def transcribe_diarize(
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )
+            os.remove(file.filename)
+            answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
+            return {"answer": answer, "backend": backend, "removed_chunks": len(chunks) - len(answer)}
 
-        os.remove(file.filename)
-        answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
-        return {"answer": answer, "backend": backend, "removed_chunks": len(chunks) - len(answer)}
+        elif backend in PROXY_URLS:
+            proxy_params = {
+                "model_to_use": model_to_use,
+                "backend": backend,
+                "align": str(align),
+                "include_fillers": str(include_fillers),
+            }
+            if num_speakers is not None:
+                proxy_params["num_speakers"] = num_speakers
+            if min_speakers is not None:
+                proxy_params["min_speakers"] = min_speakers
+            if max_speakers is not None:
+                proxy_params["max_speakers"] = max_speakers
+            if max_words_per_second is not None:
+                proxy_params["max_words_per_second"] = max_words_per_second
+            if top_n_languages is not None:
+                proxy_params["top_n_languages"] = top_n_languages
+
+            result = await _proxy_transcribe_and_diarize(PROXY_URLS[backend], file.filename, proxy_params)
+            os.remove(file.filename)
+            return result
+
+        else:
+            os.remove(file.filename)
+            raise HTTPException(
+                status_code=404,
+                detail=f"Backend '{backend}' is not available on this container and no proxy is configured for it.",
+            )
 
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -237,12 +335,16 @@ async def transcribe_diarize(
 
 @router.get("/buffer_status/")
 async def get_buffer_status(api_key: str = Depends(verify_api_key)):
-    """Get current buffer status for debugging."""
-    status = {
-        "whisper": whisper_buffer.get_status(),
-        "diarization": diarization_buffer.get_status(),
-    }
-    status.update({name.replace("-", "_"): buf.get_status() for name, buf in BACKEND_REGISTRY.items()})
+    """Get current buffer status for debugging. Only reports backends this
+    container actually runs — see LOCAL_BACKENDS."""
+    status = {}
+    if "whisper" in LOCAL_BACKENDS:
+        status["whisper"] = whisper_buffer.get_status()
+        status["diarization"] = diarization_buffer.get_status()
+    status.update(
+        {name.replace("-", "_"): buf.get_status() for name, buf in BACKEND_REGISTRY.items() if name in LOCAL_BACKENDS}
+    )
+    status["proxied_backends"] = PROXY_URLS
     return status
 
 
@@ -256,11 +358,17 @@ async def health_check():
     """
     logger.info("=== WHISPER HEALTH CHECK STARTED ===")
     try:
-        statuses = {
-            "whisper": whisper_buffer.get_status(),
-            "diarization": diarization_buffer.get_status(),
-        }
-        statuses.update({name.replace("-", "_"): buf.get_status() for name, buf in BACKEND_REGISTRY.items()})
+        statuses = {}
+        if "whisper" in LOCAL_BACKENDS:
+            statuses["whisper"] = whisper_buffer.get_status()
+            statuses["diarization"] = diarization_buffer.get_status()
+        statuses.update(
+            {
+                name.replace("-", "_"): buf.get_status()
+                for name, buf in BACKEND_REGISTRY.items()
+                if name in LOCAL_BACKENDS
+            }
+        )
 
         healthy = {name: status is not None for name, status in statuses.items()}
         is_healthy = all(healthy.values())

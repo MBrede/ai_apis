@@ -41,7 +41,7 @@ class ArkASRBuffer(DiarizeFirstASRBuffer):
         self.processor = None
         self.dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
-    def load_model(self, timeout: int = 300):
+    def load_model(self, timeout: int = 60):
         """Load ARK-ASR-3B + its processor with automatic unloading after timeout."""
         if self.is_loaded():
             self.reset_timer(timeout)

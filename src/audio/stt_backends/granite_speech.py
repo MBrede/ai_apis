@@ -49,7 +49,7 @@ class GraniteSpeechBuffer(AlignThenDiarizeASRBuffer):
         super().__init__()
         self.processor = None
 
-    def load_model(self, timeout: int = 300):
+    def load_model(self, timeout: int = 60):
         """Load Granite-Speech-4.1-2B-Plus + its processor with automatic unloading after timeout."""
         if self.is_loaded():
             self.reset_timer(timeout)

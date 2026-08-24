@@ -12,7 +12,6 @@ the legacy per-segment fallback.
 from datetime import datetime
 
 import torch
-from pyannote.audio import Pipeline
 
 from src.core.buffer_class import Model_Buffer
 from src.core.config import config
@@ -21,11 +20,13 @@ from src.core.config import config
 class DiarizationBuffer(Model_Buffer):
     """Buffer for pyannote speaker diarization pipeline."""
 
-    def load_model(self, timeout: int = 300, **kwargs):
+    def load_model(self, timeout: int = 60, **kwargs):
         """Load diarization pipeline with automatic unloading after timeout."""
         if self.is_loaded():
             self.reset_timer(timeout)
             return
+
+        from pyannote.audio import Pipeline
 
         super().load_model(timeout=timeout)
 

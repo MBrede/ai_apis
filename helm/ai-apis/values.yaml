@@ -65,14 +65,19 @@ whisper:
   # Hugging Face API token — needed to download gated models
   hfToken: ""
 
-  # Size of the PVC mounted at /root/.cache for model caching. 20Gi filled
-  # up (100% used, download failures) once all STT backends were cached
-  # simultaneously (~30GB across turbo/qwen3-asr/ark-asr/hojo-asr/
-  # granite-speech/nemotron-asr + their aligners) — bumped 2026-08-21.
-  cacheStorage: 40Gi
+  # Size of the PVC mounted at /root/.cache for model caching. This
+  # container now only runs whisperx/granite-speech/ark-asr/nemotron-asr
+  # (qwen3-asr and hojo-asr split into their own containers/PVCs 2026-08-24
+  # — see whisperQwen3asr/whisperHojoasr below — their dependency pins were
+  # genuinely incompatible with this container's transformers>=5.8).
+  cacheStorage: 20Gi
 
   # Default Whisper model to load on startup (e.g. turbo, large-v3)
   defaultModel: turbo
+
+  # Which backends this container runs in-process — see
+  # whisper_api.py's LOCAL_BACKENDS. Comma-separated backend names.
+  localBackends: "whisperx,granite-speech,ark-asr,nemotron-asr,whisper"
 
   ingress:
     # Hostname for the Whisper Ingress resource (external, with TLS)
@@ -82,6 +87,26 @@ whisper:
     # Internal hostname used by the bot when keda.enabled — HTTP only, no TLS.
     # Must be resolvable via the cluster's nginx ingress (nip.io or cluster DNS).
     internalHost: whisper-internal.cluster.local
+
+# ============================================================
+# Qwen3-ASR-only whisper backend (split from `whisper` above — see its
+# cacheStorage comment). Internal-only, no ingress; the primary whisper
+# container proxies backend=qwen3-asr requests here.
+# ============================================================
+whisperQwen3asr:
+  image: ai-apis-whisper-qwen3asr
+  port: 8080
+  cacheStorage: 10Gi
+
+# ============================================================
+# Hojo-ASR-only whisper backend (split from `whisper` above — see its
+# cacheStorage comment). Internal-only, no ingress; the primary whisper
+# container proxies backend=hojo-asr requests here.
+# ============================================================
+whisperHojoasr:
+  image: ai-apis-whisper-hojoasr
+  port: 8080
+  cacheStorage: 15Gi
 
 # ============================================================
 # Stable Diffusion image-generation API

@@ -24,7 +24,7 @@ class NemotronASRBuffer(DiarizeFirstASRBuffer):
     MODEL_ID = "nvidia/nemotron-3.5-asr-streaming-0.6b"
     DEFAULT_LANGUAGE = "English"
 
-    def load_model(self, timeout: int = 300):
+    def load_model(self, timeout: int = 60):
         """Load Nemotron-3.5-ASR via the transformers ASR pipeline, with automatic unloading."""
         if self.is_loaded():
             self.reset_timer(timeout)

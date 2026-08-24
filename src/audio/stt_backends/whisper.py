@@ -6,8 +6,6 @@ via ffmpeg-cut segments). No diarization of its own.
 
 from datetime import datetime
 
-import whisper
-
 from src.core.buffer_class import Model_Buffer
 
 
@@ -18,11 +16,13 @@ class WhisperBuffer(Model_Buffer):
         super().__init__()
         self.model_name: str = None
 
-    def load_model(self, model_name: str, timeout: int = 300, **kwargs):
+    def load_model(self, model_name: str, timeout: int = 60, **kwargs):
         """Load Whisper model with automatic unloading after timeout."""
         if self.is_loaded() and self.model_name == model_name:
             self.reset_timer(timeout)
             return
+
+        import whisper
 
         super().load_model(timeout=timeout)
 

@@ -1,11 +1,11 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-whisper
+  name: {{ .Release.Name }}-whisper-qwen3asr
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ai-apis.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whisper
+    app.kubernetes.io/component: whisper-qwen3asr
   annotations:
     helm.sh/chart: {{ include "ai-apis.chart" . }}
 spec:
@@ -17,24 +17,24 @@ spec:
   selector:
     matchLabels:
       {{- include "ai-apis.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: whisper
+      app.kubernetes.io/component: whisper-qwen3asr
   template:
     metadata:
       labels:
         {{- include "ai-apis.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: whisper
+        app.kubernetes.io/component: whisper-qwen3asr
     spec:
       {{- include "ai-apis.imagePullSecrets" . | nindent 6 }}
       terminationGracePeriodSeconds: 3600
       nodeSelector:
         {{- include "ai-apis.gpuNodeSelector" . | nindent 8 }}
       containers:
-        - name: whisper
-          image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.whisper.image) }}
+        - name: whisper-qwen3asr
+          image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.whisperQwen3asr.image) }}
           imagePullPolicy: Always
           ports:
             - name: http
-              containerPort: {{ .Values.whisper.port }}
+              containerPort: {{ .Values.whisperQwen3asr.port }}
               protocol: TCP
           env:
             - name: API_KEY
@@ -47,41 +47,15 @@ spec:
                 secretKeyRef:
                   name: ai-apis-secrets
                   key: whisperHfToken
-            - name: DEFAULT_WHISPER_MODEL
-              value: {{ .Values.whisper.defaultModel | quote }}
             - name: WHISPER_PORT
-              value: {{ .Values.whisper.port | quote }}
+              value: {{ .Values.whisperQwen3asr.port | quote }}
             - name: WHISPER_LOCAL_BACKENDS
-              value: {{ .Values.whisper.localBackends | quote }}
-            # Short in-namespace DNS names, not FQDNs — must match the KEDA
-            # HTTPScaledObjects' `hosts` list exactly (keda-httpscaledobjects.yaml),
-            # since that's matched against the outgoing request's Host header.
-            - name: WHISPER_PROXY_URL_QWEN3_ASR
-              value: "http://{{ .Release.Name }}-whisper-qwen3asr:{{ .Values.whisperQwen3asr.port }}"
-            - name: WHISPER_PROXY_URL_HOJO_ASR
-              value: "http://{{ .Release.Name }}-whisper-hojoasr:{{ .Values.whisperHojoasr.port }}"
+              value: "qwen3-asr"
             - name: USE_MONGODB
-              value: {{ .Values.global.useMongodb | quote }}
-            - name: MONGODB_DB
-              value: {{ .Values.mongodb.database | quote }}
-            # MONGO_USER and MONGO_PASSWORD are injected first so that
-            # MONGODB_URL can reference them via shell-style $(VAR) substitution
-            # when the URL is auto-constructed by the helper template.
-            - name: MONGO_USER
-              valueFrom:
-                secretKeyRef:
-                  name: ai-apis-secrets
-                  key: mongoRootUser
-            - name: MONGO_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ai-apis-secrets
-                  key: mongoRootPassword
-            - name: MONGODB_URL
-              value: {{ include "ai-apis.mongodbUrl" . | quote }}
+              value: "false"
             {{- include "ai-apis.keycloakEnv" . | nindent 12 }}
           volumeMounts:
-            - name: whisper-cache
+            - name: whisper-qwen3asr-cache
               mountPath: /root/.cache
           readinessProbe:
             httpGet:
@@ -106,6 +80,6 @@ spec:
             limits:
               nvidia.com/gpu: 1
       volumes:
-        - name: whisper-cache
+        - name: whisper-qwen3asr-cache
           persistentVolumeClaim:
-            claimName: {{ .Release.Name }}-whisper-cache
+            claimName: {{ .Release.Name }}-whisper-qwen3asr-cache

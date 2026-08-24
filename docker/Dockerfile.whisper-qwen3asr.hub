@@ -1,0 +1,31 @@
+# Qwen3-ASR-only whisper backend container — split out from the primary
+# whisper container (Dockerfile.whisper.hub) because qwen-asr's own
+# vendored model code needs transformers==4.57.6 exactly, incompatible
+# with transformers>=5.8 (needed there by Granite-Speech/ARK-ASR). See
+# whisper_api.py's module docstring for the LOCAL_BACKENDS/proxy design.
+#
+# Base image already contains: Python, CUDA, uv, system packages, api-core (FastAPI etc.), ml-base (torch, numpy)
+
+FROM mbrede/ai-apis-base:latest
+
+WORKDIR /app
+
+COPY pyproject.toml README.md /app/
+# --prerelease=allow: same reasoning as Dockerfile.whisper.hub — whisperx's
+# stable releases pin huggingface-hub<1.0.0; 3.8.7rc1 drops that pin. Its
+# own transformers floor (>=4.48.0, no upper bound) is compatible with the
+# ==4.57.6 pin below.
+RUN UV_HTTP_TIMEOUT=300 uv pip install --prerelease=allow -e "/app[whisper-qwen3asr-only]"
+
+COPY src/core/ /app/src/core/
+COPY src/audio/ /app/src/audio/
+
+EXPOSE 8080
+
+ENV WHISPER_LOCAL_BACKENDS="qwen3-asr"
+
+CMD ["gunicorn", "src.audio.whisper_api:app", \
+     "--workers", "1", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:8080", \
+     "--timeout", "30000"]

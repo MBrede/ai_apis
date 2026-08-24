@@ -153,6 +153,8 @@ REPO="${IMAGE_REPOSITORY:-${DOCKER_HUB_USER:-}}"
 # ---------------------------------------------------------------------------
 declare -A IMAGES=(
     [ai-apis-whisper]="docker/Dockerfile.whisper.hub"
+    [ai-apis-whisper-qwen3asr]="docker/Dockerfile.whisper-qwen3asr.hub"
+    [ai-apis-whisper-hojoasr]="docker/Dockerfile.whisper-hojoasr"
     [ai-apis-stable-diffusion]="docker/Dockerfile.stable_diffusion.hub"
     [ai-apis-text-classification]="docker/Dockerfile.text_analysis.hub"
     [ai-apis-bot]="docker/Dockerfile.bot"
@@ -162,6 +164,8 @@ declare -A IMAGES=(
 # Preserve insertion order for readable output
 IMAGE_ORDER=(
     ai-apis-whisper
+    ai-apis-whisper-qwen3asr
+    ai-apis-whisper-hojoasr
     ai-apis-stable-diffusion
     ai-apis-text-classification
     ai-apis-bot

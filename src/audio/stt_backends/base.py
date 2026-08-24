@@ -117,7 +117,23 @@ class DiarizingASRBuffer(Model_Buffer):
         from whisperx.diarize import DiarizationPipeline
 
         if self._diarize_pipeline is None:
-            self._diarize_pipeline = DiarizationPipeline(token=config.HF_TOKEN, device=self.device)
+            try:
+                self._diarize_pipeline = DiarizationPipeline(token=config.HF_TOKEN, device=self.device)
+            except TypeError:
+                # whisperx<3.5 (pinned for the hojo-asr container — see
+                # pyproject.toml's whisper-hojoasr-only extra) named this
+                # kwarg use_auth_token instead of token, AND defaults to
+                # "pyannote/speaker-diarization-3.1" instead of whatever
+                # newer whisperx defaults to — that model isn't gate-accepted
+                # for this deployment's HF token (Pipeline.from_pretrained
+                # silently returns None on gating failure, not an exception).
+                # Pin explicitly to the model this deployment's token IS
+                # accepted for (same one legacy DiarizationBuffer uses).
+                self._diarize_pipeline = DiarizationPipeline(
+                    model_name="pyannote/speaker-diarization-community-1",
+                    use_auth_token=config.HF_TOKEN,
+                    device=self.device,
+                )
         return self._diarize_pipeline
 
     def _load_or_cleanup(self, load_fn) -> None:

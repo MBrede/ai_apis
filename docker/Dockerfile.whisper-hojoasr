@@ -1,4 +1,12 @@
-# Whisper API Docker image
+# Hojo-ASR-only whisper backend container — split out from the primary
+# whisper container because hojo-asr itself declares torch>=2.5.1,<2.6 /
+# torchaudio>=2.5.1,<2.6, incompatible with ml-base's torch>=2.6.0 (shared
+# by every other backend). Built from scratch, NOT from mbrede/ai-apis-base
+# — that base already has torch>=2.6.0 baked in, too late to downgrade
+# once inherited. See whisper_api.py's module docstring for the
+# LOCAL_BACKENDS/proxy design, and pyproject.toml's whisper-hojoasr-only
+# extra for the exact pin chain (whisperx and pyannote-audio both had to be
+# capped to older majors too — see that extra's comments).
 FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -8,7 +16,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_SYSTEM_PYTHON=1 \
     UV_BREAK_SYSTEM_PACKAGES=1
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3.12 \
     python3.12-dev \
@@ -21,37 +28,25 @@ RUN apt-get update && apt-get install -y \
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# Install uv (the installer script now targets ~/.local/bin, not ~/.cargo/bin
-# — the old path here was stale and made every `uv` call silently fail)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
-# Copy and install dependencies
 COPY pyproject.toml README.md /app/
-# --prerelease=allow: whisperx's stable releases (<=3.8.6) pin
-# huggingface-hub<1.0.0, incompatible with transformers>=5.8 (needed by the
-# Granite-Speech backend, which itself requires huggingface-hub>=1.5.0).
-# whisperx==3.8.7rc1 drops that pin (huggingface-hub>=0.28.1, no upper
-# bound) — resolves cleanly, no --no-deps hack needed for whisperx itself.
-RUN uv pip install --prerelease=allow -e "/app[whisper]"
+RUN uv pip install -e "/app[whisper-hojoasr]"
 
-# Copy source code
 COPY src/core/ /app/src/core/
 COPY src/audio/ /app/src/audio/
 COPY .env.example /app/.env
 
-# Expose port
 EXPOSE 8080
 
-ENV WHISPER_LOCAL_BACKENDS="whisperx,granite-speech,ark-asr,nemotron-asr,whisper"
-
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the API
+ENV WHISPER_LOCAL_BACKENDS="hojo-asr"
+
 CMD ["gunicorn", "src.audio.whisper_api:app", \
      "--workers", "1", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
