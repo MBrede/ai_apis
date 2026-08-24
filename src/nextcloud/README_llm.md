@@ -126,6 +126,29 @@ file per row:
 - A file with neither a sidecar nor a batch row is untouched by this
   section — plain default transcription only (see "How it works" above).
 
+### Live example
+
+`/Shared/transcription (2)/batch_example/` has a working demo: three
+duplicated audio files (`demo_01.m4a`, `demo_02.m4a`, `demo_03.m4a`) and a
+`batch.xlsx` with one row each — `demo_03`'s row deliberately omits the
+extension in `filename` to show that both forms match. Produces:
+
+```
+transcriptions/demo_01_turbo.txt
+llm/demo_01_turbo_glm-4-7-flash_summary.md
+
+transcriptions/demo_02_turbo.txt
+transcriptions/demo_02_qwen3-asr-1.7b.txt
+llm/demo_02_turbo_glm-4-7-flash_summary.md
+llm/demo_02_turbo_glm-4-7-flash_rootcause.md
+llm/demo_02_qwen3-asr-1.7b_glm-4-7-flash_summary.md
+llm/demo_02_qwen3-asr-1.7b_glm-4-7-flash_rootcause.md
+
+transcriptions/demo_03_turbo.txt
+llm/demo_03_turbo_glm-4-7-flash_summary.md
+llm/demo_03_turbo_qwen3-14b_summary.md
+```
+
 ## Available LLMs
 
 Any model currently `enabled: true` in `llm/models-values.yaml` (KubeAI's
