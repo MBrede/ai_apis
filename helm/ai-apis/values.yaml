@@ -302,3 +302,8 @@ nextcloudLlmSync:
   # (weights not yet on the KubeAI cache PVC) can take up to ~12 minutes,
   # not just the 30-60s of a warm cold-start — kept well above that.
   llmTimeout: "900"
+
+  # Kill switch for the judges/*.yaml LLM-as-judge pass. Set to false to
+  # disable judging cluster-wide without deleting every judges/*.yaml —
+  # e.g. if kind: logprob misbehaves before it's been verified live.
+  judgeEnabled: true

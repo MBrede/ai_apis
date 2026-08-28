@@ -62,6 +62,9 @@ spec:
                   value: {{ .Values.nextcloudLlmSync.llmDefaultModel | quote }}
                 - name: LLM_TIMEOUT
                   value: {{ .Values.nextcloudLlmSync.llmTimeout | quote }}
+                # Kill switch for the judges/*.yaml LLM-as-judge pass.
+                - name: LLM_JUDGE_ENABLED
+                  value: {{ .Values.nextcloudLlmSync.judgeEnabled | quote }}
               resources:
                 requests:
                   cpu: 100m

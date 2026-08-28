@@ -23,6 +23,14 @@ Jobs are processed grouped by model (not crawl-discovery order) so that
 consecutive calls to the same KubeAI-hosted model land within its
 scaleDownDelaySeconds warm window, avoiding repeated cold starts.
 
+For batch-file-driven folders, an optional `judges/<name>.yaml` per top-level
+NEXTCLOUD_FOLDER entry (sibling to `prompts/`) scores every existing output
+cell of its `jurisdiction:` prompt(s) — either `kind: label` (the judge LLM
+states its score directly) or `kind: logprob` (G-Eval-style, score derived
+from probability-weighted token logprobs). Results land in
+`llm/<judge>_<prompt>_scores.xlsx` with a chart; already-scored cells are
+never re-scored. See README_llm.md's "Judges" section for the full schema.
+
 Fully independent of the whisper job — no audio download, no diarization, no
 Whisper calls. Files with neither a sidecar nor a batch row are never touched.
 
@@ -32,7 +40,9 @@ All configuration is read from environment variables (see README_llm.md).
 import asyncio
 import json
 import logging
+import math
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -62,8 +72,16 @@ logger = logging.getLogger(__name__)
 TRANSCRIPT_SUBFOLDER = "transcriptions"
 LLM_SUBFOLDER = "llm"
 PROMPTS_SUBFOLDER = "prompts"
+JUDGES_SUBFOLDER = "judges"
 LOCAL_PROMPTS_DIR = Path(__file__).parent / "prompts"
 DEFAULT_PROMPT = "summary"
+
+# Max candidate tokens vLLM/OpenAI returns per generated-token position when
+# logprobs are requested. No max_tokens cap is set on judge calls (see
+# _call_judge_llm) — a reasoning-tuned judge model emits <think>...</think>
+# as a mandatory part of its generation order, so truncating the token
+# budget would cut it off mid-thought before it ever reaches the answer.
+JUDGE_TOP_LOGPROBS = 20
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +125,7 @@ def _parse_sidecar(text: str) -> dict:
 
 def _collect_llm_jobs(
     client: Client, remote_roots: list[str], tmp_dir: Path
-) -> tuple[list[dict], dict[str, dict[str, dict]]]:
+) -> tuple[list[dict], dict[str, dict[str, dict]], dict[str, str]]:
     """Recursively find sidecar-driven LLM jobs ready to run.
 
     A job is ready when: a `<stem>.yaml`/`.yml` sidecar sits next to an
@@ -130,7 +148,7 @@ def _collect_llm_jobs(
         tmp_dir: Local scratch directory for downloading sidecars.
 
     Returns:
-        Tuple of (jobs, batch_folders):
+        Tuple of (jobs, batch_folders, folder_roots):
         - jobs: list of dicts (transcript_path, llm_dir, output_name, model,
           prompt, context, remote_root — the folder this job's sidecar came
           from, needed so prompt-template lookups check the right folder's
@@ -138,9 +156,14 @@ def _collect_llm_jobs(
         - batch_folders: {folder_path: batch_rows} for every folder that had
           a batch.csv/batch.xlsx, used by `_build_prompt_tables` to build
           per-prompt review tables after processing.
+        - folder_roots: {folder_path: top_level_root} for every folder in
+          batch_folders — judges resolve once per top-level root (like
+          prompts/), so the judge-scoring pass needs to know which root a
+          nested batch folder belongs to.
     """
     jobs: list[dict] = []
     batch_folders: dict[str, dict[str, dict]] = {}
+    folder_roots: dict[str, str] = {}
 
     def _walk(path: str, root: str) -> None:
         try:
@@ -154,7 +177,8 @@ def _collect_llm_jobs(
             for e in entries
             if e["isdir"]
             and e["path"].rstrip("/") != path.rstrip("/")
-            and Path(e["path"]).name not in (TRANSCRIPT_SUBFOLDER, LLM_SUBFOLDER, PROMPTS_SUBFOLDER)
+            and Path(e["path"]).name
+            not in (TRANSCRIPT_SUBFOLDER, LLM_SUBFOLDER, PROMPTS_SUBFOLDER, JUDGES_SUBFOLDER)
         ]
         files = [e for e in entries if not e["isdir"]]
         audio_stems = {
@@ -168,6 +192,7 @@ def _collect_llm_jobs(
         batch_rows = _load_batch_rows(client, files, path, tmp_dir)
         if batch_rows:
             batch_folders[path] = batch_rows
+            folder_roots[path] = root
         relevant_stems = (set(sidecars_by_stem) | set(batch_rows)) & audio_stems
 
         if relevant_stems:
@@ -247,7 +272,53 @@ def _collect_llm_jobs(
 
     for root in remote_roots:
         _walk(root, root)
-    return jobs, batch_folders
+    return jobs, batch_folders, folder_roots
+
+
+def _scan_prompt_cells(
+    client: Client, folder_path: str, batch_rows: dict[str, dict]
+) -> dict[str, dict[str, dict[str, str]]]:
+    """Map prompt -> transcript_stem -> model -> output filename, for outputs
+    that actually exist in this batch folder's llm/ right now.
+
+    Extracted from `_build_prompt_tables` (its original inline
+    existing_transcripts/existing_outputs/expected_stems logic) since the
+    judge-scoring pass needs the identical "what's actually been produced"
+    map — both callers need to know which (stem, model, prompt) cells have a
+    real `.md` output before doing anything with them.
+
+    Args:
+        client: WebDAV client.
+        folder_path: Remote folder that has the batch.csv/batch.xlsx.
+        batch_rows: {stem: row_dict}, as returned by `_load_batch_rows`.
+
+    Returns:
+        {prompt: {transcript_stem: {model: output_filename}}} — only
+        entries whose output file actually exists in llm/.
+    """
+    transcript_dir = folder_path.rstrip("/") + f"/{TRANSCRIPT_SUBFOLDER}/"
+    llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
+    try:
+        existing_transcripts = {Path(f).stem for f in client.list(transcript_dir) if f.lower().endswith(".txt")}
+    except RemoteResourceNotFound:
+        existing_transcripts = set()
+    try:
+        existing_outputs = set(client.list(llm_dir))
+    except RemoteResourceNotFound:
+        existing_outputs = set()
+
+    cells: dict[str, dict[str, dict[str, str]]] = {}
+    for stem, data in batch_rows.items():
+        parsed = _sidecar_from_dict(data)
+        stt_models = _stt_models_from_dict(data)
+        expected_stems = [stem] if not stt_models else [f"{stem}_{m}" for m in stt_models]
+        for transcript_stem in (s for s in expected_stems if s in existing_transcripts):
+            for model in parsed["models"]:
+                for prompt in parsed["prompts"]:
+                    output_name = f"{transcript_stem}_{model}_{prompt}.md"
+                    if output_name in existing_outputs:
+                        cells.setdefault(prompt, {}).setdefault(transcript_stem, {})[model] = output_name
+    return cells
 
 
 def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str, dict], tmp_dir: Path) -> None:
@@ -272,30 +343,8 @@ def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str,
         batch_rows: {stem: row_dict}, as returned by `_load_batch_rows`.
         tmp_dir: Local scratch directory for downloads/uploads.
     """
-    transcript_dir = folder_path.rstrip("/") + f"/{TRANSCRIPT_SUBFOLDER}/"
     llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
-    try:
-        existing_transcripts = {Path(f).stem for f in client.list(transcript_dir) if f.lower().endswith(".txt")}
-    except RemoteResourceNotFound:
-        existing_transcripts = set()
-    try:
-        existing_outputs = set(client.list(llm_dir))
-    except RemoteResourceNotFound:
-        existing_outputs = set()
-
-    # prompt -> transcript_stem -> model -> output filename (only entries that actually exist)
-    cells: dict[str, dict[str, dict[str, str]]] = {}
-    for stem, data in batch_rows.items():
-        parsed = _sidecar_from_dict(data)
-        stt_models = _stt_models_from_dict(data)
-        expected_stems = [stem] if not stt_models else [f"{stem}_{m}" for m in stt_models]
-        for transcript_stem in (s for s in expected_stems if s in existing_transcripts):
-            for model in parsed["models"]:
-                for prompt in parsed["prompts"]:
-                    output_name = f"{transcript_stem}_{model}_{prompt}.md"
-                    if output_name in existing_outputs:
-                        cells.setdefault(prompt, {}).setdefault(transcript_stem, {})[model] = output_name
-
+    cells = _scan_prompt_cells(client, folder_path, batch_rows)
     if not cells:
         return
 
@@ -434,7 +483,7 @@ async def _call_llm(session: aiohttp.ClientSession, model: str, prompt: str) -> 
             data = json.loads(await resp.read())
             content = data["choices"][0]["message"]["content"]
             # Reasoning models (e.g. glm-4-7-flash) can emit their chain-of-thought
-            # inline as `<think>...</think>` instead of a separate reasoning_content
+            # inline as `<think>...</think>` instead of a separate "reasoning"
             # field, depending on vLLM's reasoning-parser config. Strip it.
             if "</think>" in content:
                 content = content.rsplit("</think>", 1)[1]
@@ -445,6 +494,720 @@ async def _call_llm(session: aiohttp.ClientSession, model: str, prompt: str) -> 
         # from other failures in the logs.
         logger.error("Error calling LLM: %s: %s", type(exc).__name__, exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Judges (LLM-as-judge)
+# ---------------------------------------------------------------------------
+
+
+def _parse_judge_scale(scale) -> dict:
+    """Parse a judge YAML's `scale:` field into a normalized shape.
+
+    Accepts:
+    - `"1-5"` (a string, `low-high`) or a 2-element numeric list `[1, 5]` ->
+      an inclusive numeric range.
+    - A >2-element numeric list, e.g. `[1, 3, 5]` -> an explicit discrete
+      numeric set (supports non-contiguous scales).
+    - A list of non-numeric strings, e.g. `["poor", "fair", "good"]` -> a
+      label scale. Must be given in ASCENDING QUALITY ORDER — required for
+      `kind: logprob`'s ordinal mapping (see `_score_from_logprobs`).
+
+    Args:
+        scale: The raw `scale:` value from a parsed judge YAML.
+
+    Returns:
+        `{"type": "numeric"|"label", "values": list}`.
+
+    Raises:
+        ValueError: If `scale` doesn't match any of the above shapes.
+    """
+    if isinstance(scale, str):
+        m = re.match(r"^\s*(-?\d+)\s*-\s*(-?\d+)\s*$", scale)
+        if m:
+            low, high = int(m.group(1)), int(m.group(2))
+            return {"type": "numeric", "values": list(range(low, high + 1))}
+    elif isinstance(scale, list) and scale:
+        try:
+            nums = [int(v) if float(v).is_integer() else float(v) for v in scale]
+        except (TypeError, ValueError):
+            nums = None
+        if nums is not None:
+            if len(nums) == 2:
+                low, high = nums
+                if isinstance(low, int) and isinstance(high, int):
+                    return {"type": "numeric", "values": list(range(low, high + 1))}
+            return {"type": "numeric", "values": nums}
+        return {"type": "label", "values": [str(v) for v in scale]}
+
+    raise ValueError(f"Judge scale must be a numeric range/list or a list of labels, got: {scale!r}")
+
+
+def _normalize_anchors(anchors, scale: dict) -> dict[str, str]:
+    """Normalize a judge YAML's `anchors:` field into `{scale_value_str: description}`.
+
+    A user should never be forced to write one anchor per scale point,
+    especially on a fine-grained numeric scale (e.g. 1-100). Two input
+    shapes are accepted:
+    - dict (explicit): `{scale_value: description}` — any sparse subset,
+      used as-is at exactly those positions.
+    - list (auto-distributed): plain list of description strings with no
+      explicit positions — spread evenly across `scale["values"]`,
+      endpoints inclusive. For N anchors over M scale values, anchor `i`
+      lands at scale index `round(i * (M-1) / (N-1))` (N==1 -> the middle
+      scale value).
+
+    Args:
+        anchors: The raw `anchors:` value (dict, list, or None/absent).
+        scale: Parsed scale, as returned by `_parse_judge_scale`.
+
+    Returns:
+        `{str(scale_value): description}`, possibly empty.
+    """
+    if not anchors:
+        return {}
+    if isinstance(anchors, dict):
+        return {str(k): str(v) for k, v in anchors.items()}
+
+    values = scale["values"]
+    n, m = len(anchors), len(values)
+    if n == 1:
+        positions = [m // 2]
+    else:
+        positions = [round(i * (m - 1) / (n - 1)) for i in range(n)]
+    return {str(values[pos]): str(desc) for pos, desc in zip(positions, anchors)}
+
+
+def _format_scale_section(scale: dict) -> str:
+    """Render the scale portion of a judge prompt."""
+    if scale["type"] == "numeric":
+        return f"Scale: rate from {scale['values'][0]} to {scale['values'][-1]}."
+    return f"Scale: choose one of: {', '.join(scale['values'])}."
+
+
+def _format_anchors_section(anchors, scale: dict) -> str:
+    """Render the anchors portion of a judge prompt, or "" if none given."""
+    normalized = _normalize_anchors(anchors, scale)
+    if not normalized:
+        return ""
+    lines = "\n".join(f"- {value}: {desc}" for value, desc in normalized.items())
+    return f"Anchors:\n{lines}"
+
+
+def _format_few_shot_section(few_shot) -> str:
+    """Render the few-shot examples portion of a judge prompt, or "" if none given."""
+    if not few_shot:
+        return ""
+    blocks = []
+    for ex in few_shot:
+        block = f"Response: {ex.get('response', '')}\nScore: {ex.get('score', '')}"
+        if ex.get("rationale"):
+            block += f"\nRationale: {ex['rationale']}"
+        blocks.append(block)
+    return "Examples:\n" + "\n\n".join(blocks)
+
+
+def _format_anti_pattern_section(anti_pattern) -> str:
+    """Render the anti-pattern portion of a judge prompt, or "" if none given."""
+    items = _normalize_list(anti_pattern)
+    if not items:
+        return ""
+    lines = "\n".join(f"- {item}" for item in items)
+    return f"Do NOT reward:\n{lines}"
+
+
+def _build_judge_template(judge_data: dict) -> str:
+    """Assemble one judge's fixed-order prompt template from its parsed YAML.
+
+    Fixed section order (only non-empty/optional ones are included):
+      1. `judge_data["prompt"]` (stripped) — the user's own rubric text.
+      2. Scale section — always present.
+      3. Anchors section — only if `anchors` given.
+      4. Few-shot examples section — only if `few_shot` given.
+      5. Anti-pattern section — only if `anti_pattern` given.
+      6. "Response to evaluate:\\n{response}" — always present.
+      7. A kind-specific answer-format instruction — always present.
+
+    Sections are joined with blank lines. Returns the unrendered template
+    (still contains `{response}`, and `{transcript}`/`{context}` if section
+    1 referenced them) — built once per judge at discovery time, not per
+    scored cell.
+
+    Args:
+        judge_data: The raw parsed judge YAML dict (already validated).
+
+    Returns:
+        Unrendered judge prompt template.
+    """
+    scale = judge_data["_scale"]
+    sections = [
+        judge_data["prompt"].strip(),
+        _format_scale_section(scale),
+        _format_anchors_section(judge_data.get("anchors"), scale),
+        _format_few_shot_section(judge_data.get("few_shot")),
+        _format_anti_pattern_section(judge_data.get("anti_pattern")),
+        "Response to evaluate:\n{response}",
+        (
+            "Respond with ONLY the label above, nothing else. No explanation, no punctuation."
+            if judge_data["kind"] == "label"
+            else "Respond with a single token: the number only. Do not explain your reasoning."
+        ),
+    ]
+    return "\n\n".join(s for s in sections if s)
+
+
+def _render_judge_prompt(template: str, response: str, transcript: str = "", context: str = "") -> str:
+    """Render a judge prompt template with the response text being judged.
+
+    Args:
+        template: Unrendered template from `_build_judge_template`.
+        response: The `.md` output text being judged.
+        transcript: Original transcript text, substituted only if the
+            judge's own text references `{transcript}`.
+        context: Sidecar-provided context, substituted only if referenced.
+
+    Returns:
+        Rendered judge prompt text.
+    """
+    return template.replace("{response}", response).replace("{transcript}", transcript).replace("{context}", context)
+
+
+def _parse_judge_yaml(text: str, name: str) -> dict:
+    """Parse and validate one `judges/<name>.yaml`.
+
+    Args:
+        text: Raw YAML file contents.
+        name: Judge name (the file's stem), used in error messages and as
+            the output filename prefix.
+
+    Returns:
+        `{"name", "llm", "kind", "jurisdiction", "scale", "template"}`.
+
+    Raises:
+        ValueError: If a required field is missing, `kind` is invalid, or
+            the scale doesn't parse (see `_parse_judge_scale`). Callers
+            should catch this per-file so one malformed judge doesn't abort
+            discovery of every other judge.
+    """
+    data = yaml.safe_load(text) or {}
+    for field in ("prompt", "jurisdiction", "scale", "llm", "kind"):
+        if not data.get(field):
+            raise ValueError(f"judges/{name}.yaml: missing required field '{field}'")
+    if data["kind"] not in ("label", "logprob"):
+        raise ValueError(f"judges/{name}.yaml: kind must be 'label' or 'logprob', got {data['kind']!r}")
+
+    scale = _parse_judge_scale(data["scale"])
+    data["_scale"] = scale  # stashed for _build_judge_template, not part of the public return shape
+    return {
+        "name": name,
+        "llm": str(data["llm"]),
+        "kind": data["kind"],
+        "jurisdiction": _normalize_list(data["jurisdiction"]),
+        "scale": scale,
+        "template": _build_judge_template(data),
+    }
+
+
+def _collect_judges(client: Client, remote_roots: list[str], tmp_dir: Path) -> dict[str, list[dict]]:
+    """List `<root>/judges/*.{yaml,yml}` for each remote_root.
+
+    Non-recursive — `judges/` is a single per-root folder, same convention
+    as `prompts/` (see `_load_prompt_template`'s docstring: `remote_root` is
+    always a top-level configured folder, never a nested one).
+
+    Args:
+        client: WebDAV client.
+        remote_roots: Root remote folders to scan.
+        tmp_dir: Local scratch directory for downloading judge YAMLs.
+
+    Returns:
+        `{remote_root: [judge_config, ...]}`. A malformed judge YAML logs an
+        error and is skipped — it does not abort discovery of other judges.
+    """
+    result: dict[str, list[dict]] = {}
+    for root in remote_roots:
+        judges_dir = root.rstrip("/") + f"/{JUDGES_SUBFOLDER}/"
+        try:
+            entries = client.list(judges_dir, get_info=True)
+        except RemoteResourceNotFound:
+            continue
+        judges = []
+        for e in entries:
+            if e["isdir"] or Path(e["path"]).suffix.lower() not in SIDECAR_SUFFIXES:
+                continue
+            name = Path(e["path"]).stem
+            try:
+                text = _download_text(client, e["path"], tmp_dir)
+                judges.append(_parse_judge_yaml(text, name))
+            except Exception as exc:
+                logger.error("Failed to load judge '%s' in %s: %s", name, judges_dir, exc)
+        if judges:
+            result[root] = judges
+    return result
+
+
+def _locate_score_token(logprobs_content: list[dict], scale: dict) -> list[dict] | None:
+    """Find the `top_logprobs` candidate list at the position holding the
+    judge's answer token.
+
+    Reasoning-tuned judge models (e.g. glm-4-7-flash without a configured
+    vLLM `--reasoning-parser`) emit `<think>...</think>` inline as literal
+    text in `content` — so the answer token is not necessarily the first
+    generated token. This walks the token sequence, and once `</think>`
+    appears in the concatenated running text, resumes scanning from the
+    entry right after the one that completed it (if `</think>` never
+    appears at all, scans from index 0). Confirmed live (2026-08-28,
+    glm-4-7-flash on vLLM v0.28.0 with `--reasoning-parser=glm45`
+    configured): even once a reasoning-parser splits the message-level
+    `content`/`reasoning` fields cleanly, `logprobs.content` stays ONE flat
+    raw token stream covering reasoning + answer together and still
+    contains a literal `</think>` token — so this scan is needed
+    unconditionally, not just as a fallback for the no-parser case. From the
+    start index, returns the first entry whose own *sampled* token matches a
+    valid scale value.
+
+    Args:
+        logprobs_content: `choices[0]["logprobs"]["content"]` from a judge
+            chat-completion response — a list of
+            `{"token", "logprob", "top_logprobs": [{"token","logprob"}, ...]}`.
+        scale: Parsed scale, as returned by `_parse_judge_scale`.
+
+    Returns:
+        The matching entry's `top_logprobs` list, or `None` if no token in
+        the sequence matches any valid scale value.
+    """
+    running, start = "", 0
+    for i, entry in enumerate(logprobs_content):
+        running += entry.get("token", "")
+        if "</think>" in running:
+            start = i + 1
+            break
+
+    valid = {str(v).lower() for v in scale["values"]}
+    for entry in logprobs_content[start:]:
+        if entry.get("token", "").strip().lower() in valid:
+            return entry.get("top_logprobs") or None
+    return None
+
+
+def _score_from_logprobs(top_logprobs: list[dict], scale: dict) -> float | None:
+    """Probability-weighted G-Eval score over the candidate tokens at one position.
+
+    For a numeric scale, the candidate value is the number itself. For a
+    label scale, the candidate value is the 0-based ordinal index in
+    `scale["values"]` (ascending-quality order) — this is what makes
+    `kind: logprob` produce a continuous score even for a discrete label
+    scale.
+
+    `weight(v) = exp(logprob)` for each `top_logprobs` entry whose token
+    (stripped, case-insensitive) matches candidate value `v` (summed if the
+    same value appears via more than one token variant, e.g. `"4"` and
+    `" 4"`). `score = sum(v * weight(v)) / sum(weight(v))`, over matched `v`
+    only.
+
+    Args:
+        top_logprobs: The candidate list from `_locate_score_token`.
+        scale: Parsed scale, as returned by `_parse_judge_scale`.
+
+    Returns:
+        The weighted-average score, or `None` if zero entries match any
+        scale value.
+    """
+    if scale["type"] == "numeric":
+        candidates = {str(v).lower(): float(v) for v in scale["values"]}
+    else:
+        candidates = {v.lower(): float(i) for i, v in enumerate(scale["values"])}
+
+    weights: dict[float, float] = {}
+    for entry in top_logprobs:
+        tok = str(entry.get("token", "")).strip().lower()
+        if tok in candidates:
+            v = candidates[tok]
+            weights[v] = weights.get(v, 0.0) + math.exp(entry["logprob"])
+
+    total = sum(weights.values())
+    if total == 0:
+        return None
+    return sum(v * w for v, w in weights.items()) / total
+
+
+def _score_from_label(text: str, scale: dict) -> float | str | None:
+    """Parse a plain-text judge reply against the scale (`kind: label`).
+
+    Numeric: strips whitespace/trailing punctuation and tries `int()`/
+    `float()`; on failure, regex-searches for the first standalone integer
+    substring that's a valid scale value. Label: exact match (stripped,
+    case-insensitive) against `scale["values"]`; if no exact match, falls
+    back to "exactly one label appears as a substring of the reply".
+
+    Args:
+        text: The judge LLM's raw reply text.
+        scale: Parsed scale, as returned by `_parse_judge_scale`.
+
+    Returns:
+        The matched value (float for numeric, the original-cased label
+        string for label scales), or `None` if parsing failed.
+    """
+    cleaned = text.strip().rstrip(".!")
+    if scale["type"] == "numeric":
+        try:
+            return float(cleaned)
+        except ValueError:
+            pass
+        valid = {str(v) for v in scale["values"]}
+        for m in re.finditer(r"-?\d+(?:\.\d+)?", cleaned):
+            if m.group(0) in valid:
+                return float(m.group(0))
+        return None
+
+    for value in scale["values"]:
+        if cleaned.lower() == value.lower():
+            return value
+    matches = [v for v in scale["values"] if v.lower() in cleaned.lower()]
+    return matches[0] if len(matches) == 1 else None
+
+
+async def _call_judge_llm(
+    session: aiohttp.ClientSession, model: str, prompt: str, want_logprobs: bool
+) -> tuple[str | None, list[dict] | None]:
+    """Send a judge chat-completion request to the in-cluster KubeAI endpoint.
+
+    Same endpoint/headers/error-handling/`</think>`-stripping shape as
+    `_call_llm` (duplicated deliberately — `_call_llm` must not change for
+    the non-judge path). No `max_tokens` cap is set (see `JUDGE_TOP_LOGPROBS`'s
+    docstring note above: a reasoning-tuned model must be allowed to finish
+    its `<think>` block before it ever reaches the answer).
+
+    Args:
+        session: Shared aiohttp session.
+        model: KubeAI model name to use as judge.
+        prompt: Fully rendered judge prompt text.
+        want_logprobs: If True, requests `logprobs`/`top_logprobs` in the
+            payload (for `kind: logprob`).
+
+    Returns:
+        `(content, logprobs_content)`:
+        - content: stripped reply text, or `None` on any HTTP/network
+          failure (identical contract to `_call_llm`'s return).
+        - logprobs_content: the raw `choices[0]["logprobs"]["content"]` list
+          when `want_logprobs` was True AND the server returned a
+          well-formed non-empty logprobs field, else `None`. A `None` here
+          (not an empty list, not an exception) is the signal that the
+          server did not give us usable logprobs — the graceful-degradation
+          contract for this cluster's unverified KubeAI/vLLM logprobs
+          support.
+    """
+    llm_url = os.environ.get("LLM_URL", "http://kubeai.llm.svc.cluster.local/openai/v1")
+    endpoint = f"{llm_url.rstrip('/')}/chat/completions"
+    payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    if want_logprobs:
+        payload["logprobs"] = True
+        payload["top_logprobs"] = JUDGE_TOP_LOGPROBS
+    headers = {"Authorization": "Bearer not-used"}
+
+    try:
+        async with session.post(endpoint, json=payload, headers=headers) as resp:
+            if not (200 <= resp.status < 400):
+                body = await resp.text()
+                logger.error("Judge LLM request failed (HTTP %s): %s", resp.status, body)
+                return None, None
+            data = json.loads(await resp.read())
+            content = data["choices"][0]["message"]["content"]
+            if "</think>" in content:
+                content = content.rsplit("</think>", 1)[1]
+            content = content.strip()
+
+            logprobs_content = None
+            if want_logprobs:
+                try:
+                    logprobs_content = data["choices"][0]["logprobs"]["content"] or None
+                except (KeyError, TypeError):
+                    logprobs_content = None
+            return content, logprobs_content
+    except Exception as exc:
+        logger.error("Error calling judge LLM: %s: %s", type(exc).__name__, exc)
+        return None, None
+
+
+def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, float]]:
+    """Parse a downloaded `<judge>_<prompt>_scores.xlsx`'s "Scores" sheet
+    into `{stem: {model: score}}`.
+
+    Same download-then-parse pattern `sync.py`'s `_read_batch_xlsx` uses.
+    Blank cells (unscored) are skipped, never treated as a score of 0/None.
+
+    Args:
+        local_path: Local path of a downloaded scores workbook.
+
+    Returns:
+        `{stem: {model: score}}`.
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(local_path, read_only=True, data_only=True)
+    ws = wb["Scores"] if "Scores" in wb.sheetnames else wb.worksheets[0]
+    rows = ws.iter_rows(values_only=True)
+    header = next(rows, None)
+    if not header:
+        return {}
+    models = list(header[1:])
+
+    result: dict[str, dict[str, float]] = {}
+    for row in rows:
+        if not row or row[0] is None:
+            continue
+        stem = str(row[0])
+        for model, value in zip(models, row[1:]):
+            if value is not None:
+                result.setdefault(stem, {})[str(model)] = float(value)
+    return result
+
+
+def _load_existing_scores(client: Client, remote_path: str, tmp_dir: Path) -> dict[str, dict[str, float]]:
+    """Download+parse an existing scores workbook, or `{}` if it doesn't exist yet.
+
+    Args:
+        client: WebDAV client.
+        remote_path: Remote path of the `<judge>_<prompt>_scores.xlsx`.
+        tmp_dir: Local scratch directory for the temporary download.
+
+    Returns:
+        `{stem: {model: score}}`, `{}` if the file doesn't exist remotely.
+    """
+    local_path = tmp_dir / Path(remote_path).name
+    try:
+        client.download_sync(remote_path=remote_path, local_path=str(local_path))
+    except RemoteResourceNotFound:
+        return {}
+    try:
+        return _read_judge_scores_xlsx(local_path)
+    finally:
+        local_path.unlink(missing_ok=True)
+
+
+def _batch_row_for_transcript_stem(transcript_stem: str, batch_rows: dict[str, dict]) -> dict | None:
+    """Find the batch row whose file produced a given transcript stem.
+
+    `batch_rows` is keyed by the original audio file's stem, but a
+    transcript stem can be `<stem>` (no `stt:` override) or `<stem>_<model>`
+    (one per listed STT model) — the same expected-stems derivation
+    `_scan_prompt_cells`/`_collect_llm_jobs` use, needed here to find the
+    original row's `context:` field for a given already-scanned cell.
+
+    Args:
+        transcript_stem: A transcript stem as it appears in `transcriptions/`.
+        batch_rows: `{stem: row_dict}`, as returned by `_load_batch_rows`.
+
+    Returns:
+        The matching row dict, or `None` if no row produces this stem.
+    """
+    for stem, data in batch_rows.items():
+        stt_models = _stt_models_from_dict(data)
+        expected = [stem] if not stt_models else [f"{stem}_{m}" for m in stt_models]
+        if transcript_stem in expected:
+            return data
+    return None
+
+
+def _missing_judge_cells(
+    cells: dict[str, dict[str, str]], existing_scores: dict[str, dict[str, float]]
+) -> list[tuple[str, str, str]]:
+    """Pure set-difference: cells needing a score.
+
+    This is the entire "don't re-score" guarantee — isolated as its own
+    pure, I/O-free function specifically so it can be unit-tested in
+    isolation.
+
+    Args:
+        cells: `{stem: {model: output_filename}}` — one prompt's worth, from
+            `_scan_prompt_cells`.
+        existing_scores: `{stem: {model: score}}`, from `_load_existing_scores`.
+
+    Returns:
+        List of `(stem, model, output_filename)` triples present in `cells`
+        but absent from `existing_scores`.
+    """
+    return [
+        (stem, model, filename)
+        for stem, models in cells.items()
+        for model, filename in models.items()
+        if model not in existing_scores.get(stem, {})
+    ]
+
+
+def _collect_judge_scoring_groups(
+    client: Client,
+    batch_folders: dict[str, dict[str, dict]],
+    folder_roots: dict[str, str],
+    judges_by_root: dict[str, list[dict]],
+    tmp_dir: Path,
+) -> list[dict]:
+    """Build one scoring group per (batch folder, judge, jurisdiction prompt)
+    that has at least one existing LLM output cell.
+
+    Args:
+        client: WebDAV client.
+        batch_folders: `{folder_path: batch_rows}`, from `_collect_llm_jobs`.
+        folder_roots: `{folder_path: top_level_root}`, from `_collect_llm_jobs`.
+        judges_by_root: `{remote_root: [judge_config, ...]}`, from `_collect_judges`.
+        tmp_dir: Local scratch directory for downloads.
+
+    Returns:
+        List of dicts: `{folder_path, llm_dir, judge, prompt, cells,
+        batch_rows, existing_scores (loaded once, mutated in place by the
+        caller as new scores land), scores_remote_path}`.
+    """
+    groups = []
+    for folder_path, batch_rows in batch_folders.items():
+        judges = judges_by_root.get(folder_roots[folder_path], [])
+        if not judges:
+            continue
+        prompt_cells = _scan_prompt_cells(client, folder_path, batch_rows)
+        llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
+        for judge in judges:
+            for prompt in judge["jurisdiction"]:
+                cells = prompt_cells.get(prompt)
+                if not cells:
+                    continue
+                scores_remote_path = llm_dir + f"{judge['name']}_{prompt}_scores.xlsx"
+                groups.append(
+                    {
+                        "folder_path": folder_path,
+                        "llm_dir": llm_dir,
+                        "judge": judge,
+                        "prompt": prompt,
+                        "cells": cells,
+                        "batch_rows": batch_rows,
+                        "existing_scores": _load_existing_scores(client, scores_remote_path, tmp_dir),
+                        "scores_remote_path": scores_remote_path,
+                    }
+                )
+    return groups
+
+
+def _write_judge_scores_xlsx(local_path: Path, score_map: dict[str, dict[str, float]], models: list[str]) -> None:
+    """Write a two-sheet judge scores workbook: a "Scores" matrix and a
+    "Chart" sheet visualizing it.
+
+    "Scores": header `["filename"] + models`, one row per stem (sorted),
+    numeric cell per (stem, model), blank (`None`, not 0) if unscored —
+    blank is what makes `_missing_judge_cells` correctly treat it as
+    still-needs-scoring on a future run. "Chart": one
+    `openpyxl.chart.BarChart` built directly off the Scores sheet's cell
+    range — charts the matrix itself, no separate aggregation needed.
+
+    Full rewrite of the file's contents each call (old + new scores already
+    merged into `score_map` by the caller before this is invoked).
+
+    Args:
+        local_path: Local path to save the workbook to.
+        score_map: `{stem: {model: score}}`.
+        models: All models to include as columns, in column order.
+    """
+    from openpyxl import Workbook
+    from openpyxl.chart import BarChart, Reference
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Scores"
+    ws.append(["filename"] + models)
+    for stem in sorted(score_map):
+        ws.append([stem] + [score_map[stem].get(m) for m in models])
+
+    chart_sheet = wb.create_sheet("Chart")
+    chart = BarChart()
+    chart.type, chart.title = "col", "Scores"
+    chart.y_axis.title, chart.x_axis.title = "score", "transcript"
+    n_rows = len(score_map)
+    data = Reference(ws, min_col=2, max_col=1 + len(models), min_row=1, max_row=1 + n_rows)
+    cats = Reference(ws, min_col=1, min_row=2, max_row=1 + n_rows)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    chart_sheet.add_chart(chart, "A1")
+    wb.save(local_path)
+
+
+async def _score_one_judge_cell(
+    client: Client, session: aiohttp.ClientSession, cell_job: dict, tmp_dir: Path
+) -> float | str | None:
+    """Score one (stem, model) cell against one judge.
+
+    Downloads the output `.md` being judged, downloads the transcript only
+    if the judge's template references `{transcript}` (avoids a needless
+    WebDAV round-trip otherwise), renders the judge prompt, and dispatches
+    to label or logprob scoring per `judge["kind"]`. Any exception is
+    caught, logged, and returns `None` — never propagates (matches
+    `_call_llm`'s and the main jobs loop's per-item try/except discipline).
+
+    Args:
+        client: WebDAV client.
+        session: Shared aiohttp session.
+        cell_job: `{**group, "stem", "model", "output_name"}` — one flattened
+            work item from `_collect_judge_scoring_groups`'s groups.
+        tmp_dir: Local scratch directory for downloads.
+
+    Returns:
+        The score (float, or a label string — though `kind: label` on a
+        label scale returns the original-cased label, which the caller
+        stores as-is), or `None` if scoring failed/was skipped.
+    """
+    judge = cell_job["judge"]
+    try:
+        response_text = _download_text(client, cell_job["llm_dir"] + cell_job["output_name"], tmp_dir)
+    except Exception as exc:
+        logger.error("Judge '%s': failed to download %s: %s", judge["name"], cell_job["output_name"], exc)
+        return None
+
+    transcript = ""
+    if "{transcript}" in judge["template"]:
+        transcript_path = cell_job["folder_path"].rstrip("/") + f"/{TRANSCRIPT_SUBFOLDER}/{cell_job['stem']}.txt"
+        try:
+            transcript = _download_text(client, transcript_path, tmp_dir)
+        except Exception as exc:
+            logger.error("Judge '%s': failed to download transcript for %s: %s", judge["name"], cell_job["stem"], exc)
+
+    context = ""
+    row_data = _batch_row_for_transcript_stem(cell_job["stem"], cell_job["batch_rows"])
+    if row_data is not None:
+        context = _sidecar_from_dict(row_data)["context"]
+
+    prompt = _render_judge_prompt(judge["template"], response_text, transcript, context)
+
+    if judge["kind"] == "logprob":
+        content, logprobs_content = await _call_judge_llm(session, judge["llm"], prompt, want_logprobs=True)
+        if content is None:
+            return None
+        if not logprobs_content:
+            logger.error(
+                "Judge '%s': no usable logprobs returned by model %s "
+                "(unverified KubeAI/vLLM logprobs support) — skipping cell.",
+                judge["name"], judge["llm"],
+            )
+            return None
+        top_logprobs = _locate_score_token(logprobs_content, judge["scale"])
+        if top_logprobs is None:
+            logger.error(
+                "Judge '%s': no scale-matching token found in response (scanned %d tokens, "
+                "post-</think> aware) — skipping cell.",
+                judge["name"], len(logprobs_content),
+            )
+            return None
+        score = _score_from_logprobs(top_logprobs, judge["scale"])
+        if score is None:
+            logger.error(
+                "Judge '%s': matched token had no scale-matching alternatives in top_logprobs "
+                "(%r) — skipping cell.",
+                judge["name"], top_logprobs,
+            )
+        return score
+
+    content, _ = await _call_judge_llm(session, judge["llm"], prompt, want_logprobs=False)
+    if content is None:
+        return None
+    score = _score_from_label(content, judge["scale"])
+    if score is None:
+        logger.error("Judge '%s': could not parse a valid scale value from reply %r — skipping cell.", judge["name"], content)
+    return score
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +1224,7 @@ async def main() -> None:
     tmp_dir = Path(tempfile.mkdtemp(prefix="nc_llm_"))
     try:
         logger.info("Scanning %s for sidecar-driven LLM jobs...", remote_roots)
-        jobs, batch_folders = _collect_llm_jobs(client, remote_roots, tmp_dir)
+        jobs, batch_folders, folder_roots = _collect_llm_jobs(client, remote_roots, tmp_dir)
 
         if not jobs:
             logger.info("No LLM jobs ready to run.")
@@ -525,6 +1288,51 @@ async def main() -> None:
             llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
             if llm_dir in updated_llm_dirs:
                 _build_prompt_tables(client, folder_path, rows, tmp_dir)
+
+        # Judge pass — independent of the jobs loop above (judges may have
+        # work even on a run with zero new LLM jobs, e.g. outputs from a
+        # prior run still awaiting judging). File-driven kill switch: unset
+        # or "true" (default) runs it, any other value disables it cluster-
+        # wide without needing to delete every judges/*.yaml.
+        if os.environ.get("LLM_JUDGE_ENABLED", "true").lower() != "false":
+            judges_by_root = _collect_judges(client, remote_roots, tmp_dir)
+            if judges_by_root:
+                groups = _collect_judge_scoring_groups(client, batch_folders, folder_roots, judges_by_root, tmp_dir)
+                cell_jobs = [
+                    {**group, "stem": stem, "model": model, "output_name": filename}
+                    for group in groups
+                    for stem, model, filename in _missing_judge_cells(group["cells"], group["existing_scores"])
+                ]
+                if cell_jobs:
+                    # Same warm-model-grouping discipline as the main jobs loop.
+                    cell_jobs.sort(key=lambda j: j["judge"]["llm"])
+                    logger.info("Found %d judge-scoring cell(s) to run.", len(cell_jobs))
+                    touched_paths: set[str] = set()
+                    timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        for cj in tqdm(cell_jobs, desc="Judging"):
+                            score = await _score_one_judge_cell(client, session, cj, tmp_dir)
+                            if score is None:
+                                continue
+                            cj["existing_scores"].setdefault(cj["stem"], {})[cj["model"]] = score
+                            touched_paths.add(cj["scores_remote_path"])
+
+                    for group in groups:
+                        if group["scores_remote_path"] not in touched_paths:
+                            continue
+                        models = sorted({m for row in group["existing_scores"].values() for m in row})
+                        local = tmp_dir / Path(group["scores_remote_path"]).name
+                        _write_judge_scores_xlsx(local, group["existing_scores"], models)
+                        try:
+                            client.list(group["llm_dir"])
+                        except RemoteResourceNotFound:
+                            client.mkdir(group["llm_dir"])
+                        try:
+                            client.upload_sync(local_path=str(local), remote_path=group["scores_remote_path"])
+                            logger.info("Uploaded %s", group["scores_remote_path"])
+                        except Exception as exc:
+                            logger.error("Upload failed for %s: %s", group["scores_remote_path"], exc)
+                        local.unlink(missing_ok=True)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

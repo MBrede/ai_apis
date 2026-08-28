@@ -240,19 +240,129 @@ bundled today.
 |---|---|
 | `summary` | **Default.** Plain-language summary: topics, decisions, action items, per-speaker points. |
 
+## Judges (LLM-as-judge)
+
+Automated scored review on top of the batch-file result tables above — a
+`judges/<name>.yaml` (sibling to `prompts/`, one file per top-level
+`NEXTCLOUD_FOLDER` entry, not per nested subfolder) scores every existing
+output cell of the prompt(s) it names as `jurisdiction:`, producing
+`llm/<judge>_<prompt>_scores.xlsx` with a score matrix and a bar chart.
+
+**Scope**: judging only applies to **batch-file-driven folders** (folders
+with a `batch.csv`/`batch.xlsx`) — same limitation the `<prompt>_table.xlsx`
+review tables above already have, since that's the only place a cell's
+existence is already tracked. Plain per-file-sidecar folders get no judge
+scores (see Roadmap).
+
+**Only new/unscored cells are ever judged** — a (transcript, model) pair
+that already has a score in the workbook is never re-scored, so a judge
+doesn't re-spend LLM calls on unchanged data every cron tick (same
+discipline the review tables use for their own rebuild gate).
+
+### Judge YAML schema
+
+```yaml
+kind: label                    # required: "label" | "logprob"
+llm: qwen3-14b                 # required: KubeAI model used as judge
+jurisdiction: [summary, action-items]   # required: prompt name(s) to score; scalar or list
+scale: [poor, fair, good, excellent]    # required: numeric range/list, OR ascending-quality label list
+anchors:                       # optional: scale-value -> description
+  poor: "Summary misses major topics or contains factual errors."
+  excellent: "Summary is accurate, well-organized, captures every decision."
+anti_pattern: "Do not reward summaries that are merely long."   # optional, str or list
+few_shot:                      # optional: list of {response, score, rationale}
+  - response: "The team discussed the Q3 roadmap and agreed to ship feature X by Friday."
+    score: good
+    rationale: "Accurate, concise, captures the one decision made."
+prompt: |                      # required: judge's own instruction/rubric, self-contained
+  You are evaluating the quality of an LLM-generated meeting summary.
+  Judge how well the response captures the substance of the conversation.
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `kind` | `label` \| `logprob` | yes | See "label vs. logprob" below. |
+| `llm` | string | yes | Any model from "Available LLMs" above. |
+| `jurisdiction` | string or list | yes | Prompt name(s) this judge scores. |
+| `scale` | string, list, or list of labels | yes | `"1-5"`/`[1,5]` = inclusive numeric range; `[1,3,5]` = explicit discrete numeric set; `["poor","fair","good"]` = labels, **must be given in ascending-quality order** (needed for `kind: logprob`'s scoring). |
+| `anchors` | dict or list | no | dict = explicit `{scale_value: description}`, any sparse subset. List = plain description strings, auto-distributed evenly across the scale (endpoints included) — you never have to pick exact positions on a fine-grained scale (e.g. 1-100); 2-4 anchors (worst/mid/best) is the common case regardless of scale granularity. |
+| `anti_pattern` | string or list | no | What NOT to reward. |
+| `few_shot` | list of `{response, score, rationale}` | no | Worked examples, both good and bad. |
+| `prompt` | string | yes | Self-contained rubric text — not a reference to a `prompts/*.md` file. |
+
+`{response}` (the output text being judged) is always available in `prompt:`
+via a placeholder; `{transcript}`/`{context}` are also available if
+referenced, same plain-substitution mechanism as prompt templates above.
+
+### Worked example
+
+The `tone-quality.yaml` above assembles into this judge prompt:
+
+```
+You are evaluating the quality of an LLM-generated meeting summary.
+Judge how well the response captures the substance of the conversation.
+
+Scale: choose one of: poor, fair, good, excellent.
+
+Anchors:
+- poor: Summary misses major topics or contains factual errors.
+- excellent: Summary is accurate, well-organized, captures every decision.
+
+Examples:
+Response: The team discussed the Q3 roadmap and agreed to ship feature X by Friday.
+Score: good
+Rationale: Accurate, concise, captures the one decision made.
+
+Do NOT reward:
+- Summaries that are merely long or that repeat the transcript verbatim.
+
+Response to evaluate:
+{response}
+
+Respond with ONLY the label above, nothing else. No explanation, no punctuation.
+```
+
+For each `summary` output that exists in a batch folder's `llm/`, this
+produces one row in `llm/tone-quality_summary_scores.xlsx`: a "Scores" sheet
+(columns = models, rows = transcript stems, cells = the parsed score) and a
+"Chart" sheet with a bar chart built directly off that matrix.
+
+### `label` vs. `logprob`
+
+| | `kind: label` | `kind: logprob` |
+|---|---|---|
+| Mechanism | Judge LLM states its score/label directly; parsed from plain text. | G-Eval style: score derived from probability-weighted token logprobs at the answer position. |
+| Output | Discrete (exact scale value). | Continuous (weighted average — useful for fine-grained comparison even on a coarse scale). |
+| Dependency | None — works with any model. | Requires the KubeAI/vLLM endpoint to return usable `logprobs`/`top_logprobs`. |
+| Status | Always reliable. | **Verified live 2026-08-28 against `glm-4-7-flash`** (vLLM v0.28.0, `--reasoning-parser=glm45`) — a real request's `top_logprobs` at the located answer position produced a weighted score of ≈5.0 for a clearly-correct "5" answer, matching expectations. Not yet exercised against every possible judge `llm:` choice — if a different model's server doesn't return usable logprobs, or no token in the reply matches a scale value, the cell is logged and skipped (silently unscored, not a wrong score), so a bad fit degrades safely rather than silently. |
+
+A reasoning-tuned judge model (e.g. `glm-4-7-flash`) emits
+`<think>...</think>` as a mandatory part of its generation — the answer
+token is not necessarily the first one generated. Confirmed live: even with
+a vLLM `--reasoning-parser` configured (so the message-level `content`/
+`reasoning` fields come back cleanly split), the `logprobs` field stays ONE
+flat raw token stream covering reasoning + answer together and still
+contains a literal `</think>` token — `kind: logprob` locates the answer by
+scanning past it. No `max_tokens` cap is set on judge calls, since a small
+cap would just truncate mid-thought before the model ever reaches its
+answer.
+
 ## Output
 
 ```
 Nextcloud folder/            (one entry of NEXTCLOUD_FOLDER's comma-separated list)
 ├── prompts/                 # you manage this — one .md per prompt name
 │   └── summary.md
+├── judges/                  # optional — one .yaml per judge (batch-file folders only)
+│   └── tone-quality.yaml
 ├── interview_01.mp3
 ├── interview_01.yaml            # sidecar, uploaded alongside the audio
 ├── transcriptions/
 │   ├── interview_01.txt         # written by the whisper job (no stt: in sidecar → unsuffixed)
 │   └── interview_01.srt
 └── llm/
-    └── interview_01_glm-4-7-flash_summary.md   # written by this job
+    ├── interview_01_glm-4-7-flash_summary.md   # written by this job
+    └── tone-quality_summary_scores.xlsx         # written by the judge pass (batch folders only)
 ```
 
 See the worked example above for the full multi-model/multi-prompt output
@@ -307,6 +417,11 @@ LLM_DEFAULT_MODEL=glm-4-7-flash
 
 # Request timeout in seconds (generous to absorb cold-start queueing)
 LLM_TIMEOUT=900
+
+# Kill switch for the judge pass — set to "false" to disable judging
+# cluster-wide without deleting every judges/*.yaml (e.g. if kind: logprob
+# misbehaves in production before it's been verified). Default: enabled.
+LLM_JUDGE_ENABLED=true
 ```
 
 ## Running
@@ -326,3 +441,8 @@ convention for the extracted labels. Nothing about that is implemented yet;
 the Nextcloud `prompts/` folder and sidecar `prompt:` field exist
 specifically so that work can be added by uploading a new prompt file, with
 no code change to `sync_llm.py`.
+
+Judging (see "Judges" above) currently only covers batch-file-driven
+folders. Extending it to plain per-file-sidecar folders is a possible future
+extension — it would need its own "what output cells exist" enumeration,
+since there's no `batch_rows` to drive discovery there.
