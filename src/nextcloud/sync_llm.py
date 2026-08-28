@@ -260,10 +260,11 @@ def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str,
     are transcript stems (STT-model suffix included when `stt:` was a
     list), columns are LLM models, cells are that (stem, model, prompt)
     combination's output text (blank if not processed yet). Fully rebuilt
-    from whatever's actually in llm/ right now on every call — not
-    incrementally appended — so it's always a consistent snapshot even
-    across multiple partial runs. Only applies to batch-covered folders,
-    not plain per-file YAML sidecars.
+    from whatever's actually in llm/ right now (not incrementally appended)
+    whenever called — the caller in `main()` only calls this for folders
+    where a job actually uploaded something this run, so it's a consistent
+    snapshot without needless rework on no-op runs. Only applies to
+    batch-covered folders, not plain per-file YAML sidecars.
 
     Args:
         client: WebDAV client.
@@ -476,6 +477,7 @@ async def main() -> None:
             logger.info("Processing order (grouped by model): %s", [j["model"] for j in jobs][:50])
 
             prompt_cache: dict[str, str] = {}
+            updated_llm_dirs: set[str] = set()
             timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 for job in tqdm(jobs, desc="Processing"):
@@ -509,15 +511,20 @@ async def main() -> None:
                     try:
                         client.upload_sync(local_path=str(local_out), remote_path=remote_out)
                         logger.info("Uploaded %s", remote_out)
+                        updated_llm_dirs.add(job["llm_dir"])
                     except Exception as exc:
                         logger.error("Upload failed for %s: %s", remote_out, exc)
                     local_out.unlink(missing_ok=True)
 
-        # Rebuild batch-covered folders' per-prompt review tables regardless
-        # of whether this run had new jobs — keeps them a consistent
-        # snapshot of llm/ even on an otherwise-no-op run.
+        # Only rebuild a folder's per-prompt review tables if a job actually
+        # uploaded something new into its llm/ this run — a table is a
+        # snapshot of llm/, and llm/ didn't change otherwise. Without this,
+        # every cron tick re-downloaded and re-uploaded every table even on
+        # a fully-processed, no-op run.
         for folder_path, rows in batch_folders.items():
-            _build_prompt_tables(client, folder_path, rows, tmp_dir)
+            llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
+            if llm_dir in updated_llm_dirs:
+                _build_prompt_tables(client, folder_path, rows, tmp_dir)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
