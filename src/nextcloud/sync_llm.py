@@ -1226,6 +1226,12 @@ async def main() -> None:
         logger.info("Scanning %s for sidecar-driven LLM jobs...", remote_roots)
         jobs, batch_folders, folder_roots = _collect_llm_jobs(client, remote_roots, tmp_dir)
 
+        # Defined before the branch below (not inside `else:`) — a true
+        # no-op run (no new jobs) still needs this defined for the table-
+        # rebuild gate right after, and for the judge pass, which can have
+        # work even when this run found zero new LLM jobs.
+        updated_llm_dirs: set[str] = set()
+
         if not jobs:
             logger.info("No LLM jobs ready to run.")
         else:
@@ -1240,7 +1246,6 @@ async def main() -> None:
             logger.info("Processing order (grouped by model): %s", [j["model"] for j in jobs][:50])
 
             prompt_cache: dict[str, str] = {}
-            updated_llm_dirs: set[str] = set()
             timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 for job in tqdm(jobs, desc="Processing"):
