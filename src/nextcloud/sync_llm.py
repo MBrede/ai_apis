@@ -1127,6 +1127,36 @@ def _write_judge_scores_xlsx(local_path: Path, score_map: dict[str, dict[str, fl
     wb.save(local_path)
 
 
+def _upload_judge_group_scores(client: Client, group: dict, tmp_dir: Path) -> None:
+    """Write and upload one group's scores.xlsx from its current `existing_scores`.
+
+    Called as soon as a group's cells are all attempted (see `main()`) — not
+    batched to the end of the whole judge pass, so a large backlog's results
+    become visible incrementally, group by group, instead of only after
+    every single cell across every judge has been scored.
+
+    Args:
+        client: WebDAV client.
+        group: One entry from `_collect_judge_scoring_groups`'s result,
+            with `existing_scores` already updated with this run's new
+            scores.
+        tmp_dir: Local scratch directory for the upload.
+    """
+    models = sorted({m for row in group["existing_scores"].values() for m in row})
+    local = tmp_dir / Path(group["scores_remote_path"]).name
+    _write_judge_scores_xlsx(local, group["existing_scores"], models)
+    try:
+        client.list(group["llm_dir"])
+    except RemoteResourceNotFound:
+        client.mkdir(group["llm_dir"])
+    try:
+        client.upload_sync(local_path=str(local), remote_path=group["scores_remote_path"])
+        logger.info("Uploaded %s", group["scores_remote_path"])
+    except Exception as exc:
+        logger.error("Upload failed for %s: %s", group["scores_remote_path"], exc)
+    local.unlink(missing_ok=True)
+
+
 async def _score_one_judge_cell(
     client: Client, session: aiohttp.ClientSession, cell_job: dict, tmp_dir: Path
 ) -> float | str | None:
@@ -1312,32 +1342,29 @@ async def main() -> None:
                     # Same warm-model-grouping discipline as the main jobs loop.
                     cell_jobs.sort(key=lambda j: j["judge"]["llm"])
                     logger.info("Found %d judge-scoring cell(s) to run.", len(cell_jobs))
+
+                    # Upload each group's scores.xlsx as soon as ITS cells are
+                    # all attempted, not once at the very end — a large
+                    # backlog can have hundreds of cells across many groups;
+                    # waiting for every single one before any output becomes
+                    # visible means nothing shows up for a very long time.
+                    remaining: dict[str, int] = {}
                     touched_paths: set[str] = set()
+                    for cj in cell_jobs:
+                        remaining[cj["scores_remote_path"]] = remaining.get(cj["scores_remote_path"], 0) + 1
+                    groups_by_path = {g["scores_remote_path"]: g for g in groups}
+
                     timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         for cj in tqdm(cell_jobs, desc="Judging"):
                             score = await _score_one_judge_cell(client, session, cj, tmp_dir)
-                            if score is None:
-                                continue
-                            cj["existing_scores"].setdefault(cj["stem"], {})[cj["model"]] = score
-                            touched_paths.add(cj["scores_remote_path"])
+                            if score is not None:
+                                cj["existing_scores"].setdefault(cj["stem"], {})[cj["model"]] = score
+                                touched_paths.add(cj["scores_remote_path"])
 
-                    for group in groups:
-                        if group["scores_remote_path"] not in touched_paths:
-                            continue
-                        models = sorted({m for row in group["existing_scores"].values() for m in row})
-                        local = tmp_dir / Path(group["scores_remote_path"]).name
-                        _write_judge_scores_xlsx(local, group["existing_scores"], models)
-                        try:
-                            client.list(group["llm_dir"])
-                        except RemoteResourceNotFound:
-                            client.mkdir(group["llm_dir"])
-                        try:
-                            client.upload_sync(local_path=str(local), remote_path=group["scores_remote_path"])
-                            logger.info("Uploaded %s", group["scores_remote_path"])
-                        except Exception as exc:
-                            logger.error("Upload failed for %s: %s", group["scores_remote_path"], exc)
-                        local.unlink(missing_ok=True)
+                            remaining[cj["scores_remote_path"]] -= 1
+                            if remaining[cj["scores_remote_path"]] == 0 and cj["scores_remote_path"] in touched_paths:
+                                _upload_judge_group_scores(client, groups_by_path[cj["scores_remote_path"]], tmp_dir)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
