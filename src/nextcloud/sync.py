@@ -262,9 +262,15 @@ def _row_to_sidecar_dict(row: dict[str, str]) -> dict:
     for key, value in row.items():
         if key in BATCH_ROW_RESERVED_FIELDS:
             continue
-        value = (value or "").strip()
-        if value:
-            result[key] = value
+        # Always include the column, even blank — `_read_batch_xlsx`/
+        # `_read_batch_csv` already give every row a key per header, so
+        # this just preserves that. Skipping blanks here would mean a
+        # {field_name} placeholder referencing this column stays literally
+        # unreplaced for any row/file that happens to leave the cell empty
+        # (not substituted with "" the way {context} is), which is a real
+        # bug found live — a judge's {ground_truth} placeholder showed up
+        # unrendered for the two demo files that had no ground_truth cell.
+        result[key] = (value or "").strip()
     return result
 
 

@@ -153,9 +153,12 @@ class TestRowToSidecarDict:
         assert result["ground_truth"] == "expected reference text"
         assert "filename" not in result  # reserved, not a passthrough field
 
-    def test_blank_extra_column_omitted(self):
+    def test_blank_extra_column_included_as_empty_string(self):
+        # Found live: skipping a blank extra column entirely left a judge's
+        # {ground_truth} placeholder literally unreplaced for files with no
+        # value in that column, instead of substituting "" like {context}.
         row = {"llm": "glm-4-7-flash", "ground_truth": "   "}
-        assert "ground_truth" not in _row_to_sidecar_dict(row)
+        assert _row_to_sidecar_dict(row)["ground_truth"] == ""
 
     def test_context_passed_through_as_plain_text_not_split(self):
         row = {"context": "Case notes: patient reported dizziness, not nausea."}
