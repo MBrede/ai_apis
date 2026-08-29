@@ -59,13 +59,17 @@ stt: turbo                  # optional — STT model(s) for the WHISPER job (syn
 llm: glm-4-7-flash          # optional — LLM model(s) for THIS job; str or list; defaults to LLM_DEFAULT_MODEL env
 prompt: summary             # optional — prompt name(s), a file in prompts/; str or list; defaults to "summary"
 context: ""                 # optional — free text injected into prompt templates via a {context} placeholder
+ground_truth: ""            # anything else you add becomes a {field_name} placeholder too — see "Judges"
 ```
 
 All fields are optional — an **empty file** is a valid sidecar and means
 "process this with all defaults." The mere presence of a sidecar file is
 what opts a file into LLM processing at all (independent of whether it also
 carries an `stt:` field — a sidecar with only `stt:` still triggers this
-job with default `llm`/`prompt`).
+job with default `llm`/`prompt`). Any field beyond `stt`/`llm`/`prompt`/
+`context` is not part of the fixed schema — it's an arbitrary extra field,
+available as a `{field_name}` placeholder in prompt AND judge templates
+(see "Arbitrary extra fields" under "Judges" below).
 
 ### Worked example — lists for both STT and LLM+prompt
 
@@ -125,6 +129,10 @@ file per row:
   one file without touching the batch file.
 - A file with neither a sidecar nor a batch row is untouched by this
   section — plain default transcription only (see "How it works" above).
+- Any OTHER column beyond `filename`/`stt`/`llm`/`prompt`/`context` (e.g. a
+  `ground_truth` column) is passed through per-row too, available as a
+  `{field_name}` placeholder in prompt AND judge templates — see "Arbitrary
+  extra fields" under "Judges" below.
 
 ### Live example
 
@@ -246,7 +254,11 @@ Automated scored review on top of the batch-file result tables above — a
 `judges/<name>.yaml` (sibling to `prompts/`, one file per top-level
 `NEXTCLOUD_FOLDER` entry, not per nested subfolder) scores every existing
 output cell of the prompt(s) it names as `jurisdiction:`, producing
-`llm/<judge>_<prompt>_scores.xlsx` with a score matrix and a bar chart.
+`llm/<judge>_scores.xlsx`: **one workbook per judge**, covering every
+jurisdiction prompt at once — one sheet per prompt (score matrix + bar
+chart) plus an "Overview" sheet comparing average score per prompt, so you
+can see how a judge rates `summary` vs. `rootcause` outputs side by side in
+one file instead of hunting across several.
 
 **Scope**: judging only applies to **batch-file-driven folders** (folders
 with a `batch.csv`/`batch.xlsx`) — same limitation the `<prompt>_table.xlsx`
@@ -294,6 +306,40 @@ prompt: |                      # required: judge's own instruction/rubric, self-
 via a placeholder; `{transcript}`/`{context}` are also available if
 referenced, same plain-substitution mechanism as prompt templates above.
 
+### Arbitrary extra fields (e.g. a ground-truth column)
+
+The sidecar/batch-row schema isn't limited to `stt`/`llm`/`prompt`/`context`
+— any OTHER column in `batch.xlsx` (or extra top-level key in a `<stem>.yaml`
+sidecar) is passed through automatically and available as a `{field_name}`
+placeholder, in **both** regular prompt templates and judge templates. This
+is what makes real reference-based judging possible — add a `ground_truth`
+column to your batch file with a hand-written reference answer per file,
+then reference `{ground_truth}` in a judge's `prompt:` text to have the
+judge actually compare the model's output against it, instead of only doing
+a reference-free quality check against the transcript.
+
+```
+| filename      | llm           | prompt  | ground_truth                                    |
+|---------------|---------------|---------|--------------------------------------------------|
+| interview_01  | glm-4-7-flash | summary | Root cause: unfamiliar with RFID terminology...   |
+```
+
+```yaml
+# judges/accuracy-vs-reference.yaml
+kind: label
+llm: qwen3-32b
+jurisdiction: [summary]
+scale: [poor, fair, good, excellent]
+prompt: |
+  Compare the response below against the ground truth reference. Judge how
+  well it captures the same key information.
+
+  Ground truth: {ground_truth}
+```
+
+No code change needed for a new field name — it's picked up automatically
+from whatever's actually in the sheet/sidecar.
+
 ### Worked example
 
 The `tone-quality.yaml` above assembles into this judge prompt:
@@ -323,9 +369,12 @@ Respond with ONLY the label above, nothing else. No explanation, no punctuation.
 ```
 
 For each `summary` output that exists in a batch folder's `llm/`, this
-produces one row in `llm/tone-quality_summary_scores.xlsx`: a "Scores" sheet
-(columns = models, rows = transcript stems, cells = the parsed score) and a
-"Chart" sheet with a bar chart built directly off that matrix.
+produces `llm/tone-quality_scores.xlsx` with a `summary` sheet (columns =
+models, rows = transcript stems, cells = the parsed score, plus an embedded
+bar chart) — and, if `jurisdiction:` also named `rootcause`, a second
+`rootcause` sheet right alongside it in the SAME file, plus an "Overview"
+sheet averaging each model's score per prompt so the two are directly
+comparable.
 
 ### `label` vs. `logprob`
 
@@ -336,7 +385,7 @@ produces one row in `llm/tone-quality_summary_scores.xlsx`: a "Scores" sheet
 | Dependency | None — works with any model. | Requires the KubeAI/vLLM endpoint to return usable `logprobs`/`top_logprobs`. |
 | Status | Always reliable. | **Verified live 2026-08-28 against `glm-4-7-flash`** (vLLM v0.28.0, `--reasoning-parser=glm45`) — a real request's `top_logprobs` at the located answer position produced a weighted score of ≈5.0 for a clearly-correct "5" answer, matching expectations. Not yet exercised against every possible judge `llm:` choice — if a different model's server doesn't return usable logprobs, or no token in the reply matches a scale value, the cell is logged and skipped (silently unscored, not a wrong score), so a bad fit degrades safely rather than silently. |
 
-A reasoning-tuned judge model (e.g. `glm-4-7-flash`) emits
+A reasoning-tuned judge model (e.g. `glm-4-7-flash`, any Qwen3 model) emits
 `<think>...</think>` as a mandatory part of its generation — the answer
 token is not necessarily the first one generated. Confirmed live: even with
 a vLLM `--reasoning-parser` configured (so the message-level `content`/
@@ -346,6 +395,18 @@ contains a literal `</think>` token — `kind: logprob` locates the answer by
 scanning past it. No `max_tokens` cap is set on judge calls, since a small
 cap would just truncate mid-thought before the model ever reaches its
 answer.
+
+**`kind: label` reliability note (found live, 2026-08-28)**: on a large
+production backlog, a `kind: label` judge using a small model
+(`qwen3-0b6`) produced ~55 unparseable replies — its `<think>` block
+sometimes never closes with `</think>` at all, and the naive
+"exactly one label appears as a substring of the reply" fallback has no
+way to recover from that the way `kind: logprob`'s targeted post-`</think>`
+token scan does. All models in the KubeAI catalog (Qwen3 family + GLM) now
+have a `--reasoning-parser` configured, which reduces how often this
+happens, but doesn't eliminate the tiny-model verbosity issue. If a
+`kind: label` judge produces a lot of skipped cells, prefer `kind: logprob`
+or a larger/more instruction-following model.
 
 ## Output
 
@@ -362,7 +423,8 @@ Nextcloud folder/            (one entry of NEXTCLOUD_FOLDER's comma-separated li
 │   └── interview_01.srt
 └── llm/
     ├── interview_01_glm-4-7-flash_summary.md   # written by this job
-    └── tone-quality_summary_scores.xlsx         # written by the judge pass (batch folders only)
+    └── tone-quality_scores.xlsx                 # written by the judge pass — one file per judge,
+                                                  # one sheet per jurisdiction prompt (batch folders only)
 ```
 
 See the worked example above for the full multi-model/multi-prompt output
@@ -394,6 +456,15 @@ file looks "unprocessed" under the new naming scheme and gets reprocessed
 once — this is deliberate, not a bug, and is the direct consequence of
 making per-model tracking correct. Old `<stem>_<prompt>.md` files are never
 deleted automatically; clean them up manually if desired.
+
+**Judge output naming migration (2026-08-28)**: judge score files moved
+from `<judge>_<prompt>_scores.xlsx` (one per judge+prompt pair) to
+`<judge>_scores.xlsx` (one per judge, all jurisdiction prompts as separate
+sheets). Old `<judge>_<prompt>_scores.xlsx` files are orphaned, not deleted
+or migrated automatically — the next judge run creates the new
+consolidated file fresh, re-scoring nothing that was already scored (the
+skip-check reads the NEW file's sheets, not the old one). Clean up old
+files manually if desired.
 
 ## Multi-folder scanning
 
