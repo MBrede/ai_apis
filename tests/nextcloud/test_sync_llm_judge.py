@@ -367,6 +367,32 @@ class TestReadWriteJudgeScoresXlsx:
         assert overview[0] == ("prompt", "m1")
         assert overview[1] == ("summary", 3.0)
 
+    def test_label_string_scores_dont_crash_overview_average(self, tmp_path):
+        # kind: label on a non-numeric scale (e.g. poor/fair/good/excellent)
+        # stores the label string itself as the score — found live crashing
+        # the Overview sheet's averaging with
+        # "TypeError: unsupported operand type(s) for +: 'int' and 'str'".
+        prompts_data = {"summary": {"demo_a": {"m1": "good"}, "demo_b": {"m1": "excellent"}}}
+        path = tmp_path / "tone_scores.xlsx"
+        _write_judge_scores_xlsx(path, prompts_data)  # must not raise
+        result = _read_judge_scores_xlsx(path)
+        assert result == {"summary": {"demo_a": {"m1": "good"}, "demo_b": {"m1": "excellent"}}}
+
+    def test_overview_averages_only_numeric_scores(self, tmp_path):
+        from openpyxl import load_workbook
+
+        # Mixed numeric (kind: logprob) and label-string (kind: label)
+        # models in the same prompt — only the numeric one gets an average.
+        prompts_data = {"summary": {"demo_a": {"numeric_judge": 4.0, "label_judge": "good"}}}
+        path = tmp_path / "scores.xlsx"
+        _write_judge_scores_xlsx(path, prompts_data)
+        wb = load_workbook(path, data_only=True)
+        rows = list(wb["Overview"].iter_rows(values_only=True))
+        header, data_row = rows[0], dict(zip(rows[0][1:], rows[1][1:]))
+        assert header[1:] == ("label_judge", "numeric_judge")
+        assert data_row["numeric_judge"] == 4.0
+        assert data_row["label_judge"] is None
+
     def test_charts_present_per_prompt_sheet_and_overview(self, tmp_path):
         from openpyxl import load_workbook
 

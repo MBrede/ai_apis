@@ -976,7 +976,7 @@ async def _call_judge_llm(
         return None, None
 
 
-def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, dict[str, float]]]:
+def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, dict[str, float | str]]]:
     """Parse a downloaded `<judge>_scores.xlsx` into `{prompt: {stem: {model: score}}}`.
 
     Each jurisdiction prompt gets its own sheet, named after the prompt
@@ -989,6 +989,13 @@ def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, dict[str, f
     resume scoring from. Blank cells (unscored) are skipped, never treated
     as a score of 0/None.
 
+    A score can be numeric (`kind: logprob`, or `kind: label` on a numeric
+    scale) or a label string (`kind: label` on a non-numeric scale, e.g.
+    poor/fair/good/excellent — see `_score_from_label`). openpyxl already
+    returns each cell as its native stored type, so no conversion is
+    needed — just pass the value through as-is (forcing `float()`
+    unconditionally here previously crashed on any label-string score).
+
     Args:
         local_path: Local path of a downloaded scores workbook.
 
@@ -998,7 +1005,7 @@ def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, dict[str, f
     from openpyxl import load_workbook
 
     wb = load_workbook(local_path, read_only=True, data_only=True)
-    result: dict[str, dict[str, dict[str, float]]] = {}
+    result: dict[str, dict[str, dict[str, float | str]]] = {}
     for sheet_name in wb.sheetnames:
         if sheet_name == "Overview":
             continue
@@ -1008,20 +1015,22 @@ def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, dict[str, f
             continue
         models = list(header[1:])
 
-        prompt_scores: dict[str, dict[str, float]] = {}
+        prompt_scores: dict[str, dict[str, float | str]] = {}
         for row in rows:
             if not row or row[0] is None:
                 continue
             stem = str(row[0])
             for model, value in zip(models, row[1:]):
                 if value is not None:
-                    prompt_scores.setdefault(stem, {})[str(model)] = float(value)
+                    prompt_scores.setdefault(stem, {})[str(model)] = value
         if prompt_scores:
             result[sheet_name] = prompt_scores
     return result
 
 
-def _load_existing_scores(client: Client, remote_path: str, tmp_dir: Path) -> dict[str, dict[str, dict[str, float]]]:
+def _load_existing_scores(
+    client: Client, remote_path: str, tmp_dir: Path
+) -> dict[str, dict[str, dict[str, float | str]]]:
     """Download+parse an existing scores workbook, or `{}` if it doesn't exist yet.
 
     Args:
@@ -1155,7 +1164,7 @@ def _collect_judge_scoring_groups(
     return groups
 
 
-def _write_judge_scores_xlsx(local_path: Path, prompts_data: dict[str, dict[str, dict[str, float]]]) -> None:
+def _write_judge_scores_xlsx(local_path: Path, prompts_data: dict[str, dict[str, dict[str, float | str]]]) -> None:
     """Write one judge's scores workbook: one sheet per jurisdiction prompt,
     plus an "Overview" sheet comparing prompts against each other.
 
@@ -1188,9 +1197,11 @@ def _write_judge_scores_xlsx(local_path: Path, prompts_data: dict[str, dict[str,
     wb.remove(wb.active)
 
     overview_rows: list[tuple[str, dict[str, float]]] = []
+    all_models: set[str] = set()
     for prompt in sorted(prompts_data):
         score_map = prompts_data[prompt]
         models = sorted({m for row in score_map.values() for m in row})
+        all_models.update(models)
         ws = wb.create_sheet(prompt[:31])
         ws.append(["filename"] + models)
         for stem in sorted(score_map):
@@ -1207,30 +1218,38 @@ def _write_judge_scores_xlsx(local_path: Path, prompts_data: dict[str, dict[str,
             chart.set_categories(cats)
             ws.add_chart(chart, ws.cell(row=1, column=len(models) + 3).coordinate)
 
-        averages = {
-            model: sum(row[model] for row in score_map.values() if model in row)
-            / sum(1 for row in score_map.values() if model in row)
-            for model in models
-            if any(model in row for row in score_map.values())
-        }
+        # kind: label with a non-numeric scale (e.g. poor/fair/good/excellent)
+        # stores the label string itself as the score (see _score_from_label) —
+        # only numeric scores (numeric-scale label judges, or any kind: logprob
+        # judge, which always produces a float) can be averaged. A model whose
+        # scores are all non-numeric labels still gets its own Overview
+        # column (for a consistent model list across every sheet) but with a
+        # blank average, rather than crashing or silently coercing strings to 0.
+        averages = {}
+        for model in models:
+            numeric_values = [
+                row[model] for row in score_map.values() if isinstance(row.get(model), (int, float))
+            ]
+            if numeric_values:
+                averages[model] = sum(numeric_values) / len(numeric_values)
         overview_rows.append((prompt, averages))
 
     overview = wb.create_sheet("Overview", 0)
-    all_models = sorted({m for _, avg in overview_rows for m in avg})
-    overview.append(["prompt"] + all_models)
+    sorted_models = sorted(all_models)
+    overview.append(["prompt"] + sorted_models)
     for prompt, avg in overview_rows:
-        overview.append([prompt] + [avg.get(m) for m in all_models])
+        overview.append([prompt] + [avg.get(m) for m in sorted_models])
 
     n_prompts = len(overview_rows)
-    if all_models and n_prompts:
+    if sorted_models and n_prompts:
         chart = BarChart()
         chart.type, chart.title = "col", "Prompt comparison"
         chart.y_axis.title, chart.x_axis.title = "avg score", "prompt"
-        data = Reference(overview, min_col=2, max_col=1 + len(all_models), min_row=1, max_row=1 + n_prompts)
+        data = Reference(overview, min_col=2, max_col=1 + len(sorted_models), min_row=1, max_row=1 + n_prompts)
         cats = Reference(overview, min_col=1, min_row=2, max_row=1 + n_prompts)
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(cats)
-        overview.add_chart(chart, overview.cell(row=1, column=len(all_models) + 3).coordinate)
+        overview.add_chart(chart, overview.cell(row=1, column=len(sorted_models) + 3).coordinate)
 
     wb.save(local_path)
 
