@@ -147,6 +147,16 @@ class TestRowToSidecarDict:
             "llm": ["glm-4-7-flash", "qwen3-14b"],
         }
 
+    def test_unknown_column_passed_through_as_extra_field(self):
+        row = {"filename": "demo_a", "llm": "glm-4-7-flash", "ground_truth": "expected reference text"}
+        result = _row_to_sidecar_dict(row)
+        assert result["ground_truth"] == "expected reference text"
+        assert "filename" not in result  # reserved, not a passthrough field
+
+    def test_blank_extra_column_omitted(self):
+        row = {"llm": "glm-4-7-flash", "ground_truth": "   "}
+        assert "ground_truth" not in _row_to_sidecar_dict(row)
+
     def test_context_passed_through_as_plain_text_not_split(self):
         row = {"context": "Case notes: patient reported dizziness, not nausea."}
         assert _row_to_sidecar_dict(row) == {

@@ -17,7 +17,10 @@ result is uploaded to a sibling ``llm/`` folder as
 folded into the filename automatically since it's already part of
 `<transcript_stem>`. An optional `context:` field is injected into prompt
 templates via a `{context}` placeholder (same plain-string-replace
-mechanism as `{transcript}`).
+mechanism as `{transcript}`). Any OTHER field beyond the fixed
+`stt`/`llm`/`prompt`/`context` schema (e.g. a `ground_truth` column added
+to a batch.xlsx) is likewise available as a `{field_name}` placeholder —
+see `_sidecar_from_dict`'s `extra_fields`.
 
 Jobs are processed grouped by model (not crawl-discovery order) so that
 consecutive calls to the same KubeAI-hosted model land within its
@@ -28,8 +31,13 @@ NEXTCLOUD_FOLDER entry (sibling to `prompts/`) scores every existing output
 cell of its `jurisdiction:` prompt(s) — either `kind: label` (the judge LLM
 states its score directly) or `kind: logprob` (G-Eval-style, score derived
 from probability-weighted token logprobs). Results land in
-`llm/<judge>_<prompt>_scores.xlsx` with a chart; already-scored cells are
-never re-scored. See README_llm.md's "Judges" section for the full schema.
+`llm/<judge>_scores.xlsx` — one sheet per jurisdiction prompt plus an
+"Overview" comparison sheet, so a judge's take across different prompts is
+comparable in one file, not scattered across several. Already-scored cells
+are never re-scored. Arbitrary extra sidecar/batch-row fields (e.g. a
+user-added `ground_truth` column) are available as `{field_name}`
+placeholders in both prompt and judge templates. See README_llm.md's
+"Judges" section for the full schema.
 
 Fully independent of the whisper job — no audio download, no diarization, no
 Whisper calls. Files with neither a sidecar nor a batch row are never touched.
@@ -89,6 +97,9 @@ JUDGE_TOP_LOGPROBS = 20
 # ---------------------------------------------------------------------------
 
 
+_RESERVED_SIDECAR_FIELDS = frozenset({"stt", "llm", "prompt", "context"})
+
+
 def _sidecar_from_dict(data: dict) -> dict:
     """Normalize an already-parsed sidecar/batch-row dict into model/prompt lists + context.
 
@@ -101,14 +112,26 @@ def _sidecar_from_dict(data: dict) -> dict:
     ignored here — that field belongs to sync.py's whisper stage (see
     `_stt_models_from_dict`).
 
+    Any field beyond the fixed schema (`stt`/`llm`/`prompt`/`context`) is
+    passed through as `extra_fields` — lets a user add an arbitrary column
+    (e.g. a `ground_truth` column in batch.xlsx, or an extra key in a YAML
+    sidecar) and reference it as a `{field_name}` placeholder in both
+    prompt templates (`_render_prompt`) and judge templates
+    (`_render_judge_prompt`), same plain-substitution mechanism as
+    `{context}`.
+
     Returns:
-        Dict with keys "models" (list[str]), "prompts" (list[str]), and
-        "context" (str, empty if absent).
+        Dict with keys "models" (list[str]), "prompts" (list[str]),
+        "context" (str, empty if absent), and "extra_fields"
+        (dict[str, str], empty if none present).
     """
     models = _normalize_list(data.get("llm")) or [os.environ.get("LLM_DEFAULT_MODEL", "glm-4-7-flash")]
     prompts = _normalize_list(data.get("prompt")) or [DEFAULT_PROMPT]
     context = str(data.get("context") or "")
-    return {"models": models, "prompts": prompts, "context": context}
+    extra_fields = {
+        str(k): str(v) for k, v in data.items() if k not in _RESERVED_SIDECAR_FIELDS and v is not None
+    }
+    return {"models": models, "prompts": prompts, "context": context, "extra_fields": extra_fields}
 
 
 def _parse_sidecar(text: str) -> dict:
@@ -263,6 +286,7 @@ def _collect_llm_jobs(
                                     "model": model,
                                     "prompt": prompt,
                                     "context": parsed["context"],
+                                    "extra_fields": parsed["extra_fields"],
                                     "remote_root": root,
                                 }
                             )
@@ -440,8 +464,8 @@ def _load_prompt_template(
     return template
 
 
-def _render_prompt(template: str, transcript: str, context: str = "") -> str:
-    """Render a prompt template with the transcript text and optional context.
+def _render_prompt(template: str, transcript: str, context: str = "", extra_fields: dict[str, str] | None = None) -> str:
+    """Render a prompt template with the transcript text and optional context/extra fields.
 
     Args:
         template: Raw template text (from `_load_prompt_template`).
@@ -451,11 +475,18 @@ def _render_prompt(template: str, transcript: str, context: str = "") -> str:
             `{transcript}`). Templates that don't reference `{context}` are
             unaffected — empty string is the default, matching every sidecar
             that omits the field.
+        extra_fields: Any non-schema sidecar/batch-row fields (see
+            `_sidecar_from_dict`), each substituted as its own
+            `{field_name}` placeholder. A template that doesn't reference a
+            given field name is unaffected.
 
     Returns:
         Rendered prompt text.
     """
-    return template.replace("{transcript}", transcript).replace("{context}", context)
+    rendered = template.replace("{transcript}", transcript).replace("{context}", context)
+    for key, value in (extra_fields or {}).items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
 
 
 async def _call_llm(session: aiohttp.ClientSession, model: str, prompt: str) -> str | None:
@@ -656,7 +687,13 @@ def _build_judge_template(judge_data: dict) -> str:
     return "\n\n".join(s for s in sections if s)
 
 
-def _render_judge_prompt(template: str, response: str, transcript: str = "", context: str = "") -> str:
+def _render_judge_prompt(
+    template: str,
+    response: str,
+    transcript: str = "",
+    context: str = "",
+    extra_fields: dict[str, str] | None = None,
+) -> str:
     """Render a judge prompt template with the response text being judged.
 
     Args:
@@ -665,11 +702,21 @@ def _render_judge_prompt(template: str, response: str, transcript: str = "", con
         transcript: Original transcript text, substituted only if the
             judge's own text references `{transcript}`.
         context: Sidecar-provided context, substituted only if referenced.
+        extra_fields: Any non-schema sidecar/batch-row fields from the
+            judged file's own row (see `_sidecar_from_dict`) — e.g. a
+            user-added `ground_truth` column, referenced as `{ground_truth}`
+            in the judge's `prompt:` text for real reference-based judging,
+            not just reference-free quality checks.
 
     Returns:
         Rendered judge prompt text.
     """
-    return template.replace("{response}", response).replace("{transcript}", transcript).replace("{context}", context)
+    rendered = (
+        template.replace("{response}", response).replace("{transcript}", transcript).replace("{context}", context)
+    )
+    for key, value in (extra_fields or {}).items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
 
 
 def _parse_judge_yaml(text: str, name: str) -> dict:
@@ -929,50 +976,61 @@ async def _call_judge_llm(
         return None, None
 
 
-def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, float]]:
-    """Parse a downloaded `<judge>_<prompt>_scores.xlsx`'s "Scores" sheet
-    into `{stem: {model: score}}`.
+def _read_judge_scores_xlsx(local_path: Path) -> dict[str, dict[str, dict[str, float]]]:
+    """Parse a downloaded `<judge>_scores.xlsx` into `{prompt: {stem: {model: score}}}`.
 
-    Same download-then-parse pattern `sync.py`'s `_read_batch_xlsx` uses.
-    Blank cells (unscored) are skipped, never treated as a score of 0/None.
+    Each jurisdiction prompt gets its own sheet, named after the prompt
+    (truncated to Excel's 31-char sheet-name limit, and subject to
+    openpyxl's own sanitizing/dedup of invalid characters — a strong
+    assumption that jurisdiction prompt names are short simple slugs, true
+    of every prompt name in this codebase's actual use so far). The
+    "Overview" sheet (a derived cross-prompt comparison, see
+    `_write_judge_scores_xlsx`) is skipped — it's not raw per-cell data to
+    resume scoring from. Blank cells (unscored) are skipped, never treated
+    as a score of 0/None.
 
     Args:
         local_path: Local path of a downloaded scores workbook.
 
     Returns:
-        `{stem: {model: score}}`.
+        `{prompt: {stem: {model: score}}}`.
     """
     from openpyxl import load_workbook
 
     wb = load_workbook(local_path, read_only=True, data_only=True)
-    ws = wb["Scores"] if "Scores" in wb.sheetnames else wb.worksheets[0]
-    rows = ws.iter_rows(values_only=True)
-    header = next(rows, None)
-    if not header:
-        return {}
-    models = list(header[1:])
-
-    result: dict[str, dict[str, float]] = {}
-    for row in rows:
-        if not row or row[0] is None:
+    result: dict[str, dict[str, dict[str, float]]] = {}
+    for sheet_name in wb.sheetnames:
+        if sheet_name == "Overview":
             continue
-        stem = str(row[0])
-        for model, value in zip(models, row[1:]):
-            if value is not None:
-                result.setdefault(stem, {})[str(model)] = float(value)
+        rows = wb[sheet_name].iter_rows(values_only=True)
+        header = next(rows, None)
+        if not header:
+            continue
+        models = list(header[1:])
+
+        prompt_scores: dict[str, dict[str, float]] = {}
+        for row in rows:
+            if not row or row[0] is None:
+                continue
+            stem = str(row[0])
+            for model, value in zip(models, row[1:]):
+                if value is not None:
+                    prompt_scores.setdefault(stem, {})[str(model)] = float(value)
+        if prompt_scores:
+            result[sheet_name] = prompt_scores
     return result
 
 
-def _load_existing_scores(client: Client, remote_path: str, tmp_dir: Path) -> dict[str, dict[str, float]]:
+def _load_existing_scores(client: Client, remote_path: str, tmp_dir: Path) -> dict[str, dict[str, dict[str, float]]]:
     """Download+parse an existing scores workbook, or `{}` if it doesn't exist yet.
 
     Args:
         client: WebDAV client.
-        remote_path: Remote path of the `<judge>_<prompt>_scores.xlsx`.
+        remote_path: Remote path of the `<judge>_scores.xlsx`.
         tmp_dir: Local scratch directory for the temporary download.
 
     Returns:
-        `{stem: {model: score}}`, `{}` if the file doesn't exist remotely.
+        `{prompt: {stem: {model: score}}}`, `{}` if the file doesn't exist remotely.
     """
     local_path = tmp_dir / Path(remote_path).name
     try:
@@ -1042,8 +1100,14 @@ def _collect_judge_scoring_groups(
     judges_by_root: dict[str, list[dict]],
     tmp_dir: Path,
 ) -> list[dict]:
-    """Build one scoring group per (batch folder, judge, jurisdiction prompt)
-    that has at least one existing LLM output cell.
+    """Build one scoring group per (batch folder, judge) with at least one
+    jurisdiction prompt having existing LLM output cells.
+
+    One group == one output workbook (`llm/<judge>_scores.xlsx`) — a judge
+    scoring multiple jurisdiction prompts in the same folder gets ONE file
+    with one sheet per prompt, not one file per prompt, so a person can
+    compare a judge's take across different prompts side by side instead
+    of hunting across scattered files.
 
     Args:
         client: WebDAV client.
@@ -1053,9 +1117,9 @@ def _collect_judge_scoring_groups(
         tmp_dir: Local scratch directory for downloads.
 
     Returns:
-        List of dicts: `{folder_path, llm_dir, judge, prompt, cells,
-        batch_rows, existing_scores (loaded once, mutated in place by the
-        caller as new scores land), scores_remote_path}`.
+        List of dicts: `{folder_path, llm_dir, judge, batch_rows,
+        scores_remote_path, prompts: {prompt: {cells, existing_scores
+        (loaded once, mutated in place by the caller as new scores land)}}}`.
     """
     groups = []
     for folder_path, batch_rows in batch_folders.items():
@@ -1065,65 +1129,109 @@ def _collect_judge_scoring_groups(
         prompt_cells = _scan_prompt_cells(client, folder_path, batch_rows)
         llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
         for judge in judges:
+            scores_remote_path = llm_dir + f"{judge['name']}_scores.xlsx"
+            existing_by_prompt = _load_existing_scores(client, scores_remote_path, tmp_dir)
+            prompts_data: dict[str, dict] = {}
             for prompt in judge["jurisdiction"]:
                 cells = prompt_cells.get(prompt)
                 if not cells:
                     continue
-                scores_remote_path = llm_dir + f"{judge['name']}_{prompt}_scores.xlsx"
-                groups.append(
-                    {
-                        "folder_path": folder_path,
-                        "llm_dir": llm_dir,
-                        "judge": judge,
-                        "prompt": prompt,
-                        "cells": cells,
-                        "batch_rows": batch_rows,
-                        "existing_scores": _load_existing_scores(client, scores_remote_path, tmp_dir),
-                        "scores_remote_path": scores_remote_path,
-                    }
-                )
+                prompts_data[prompt] = {
+                    "cells": cells,
+                    "existing_scores": existing_by_prompt.get(prompt, {}),
+                }
+            if not prompts_data:
+                continue
+            groups.append(
+                {
+                    "folder_path": folder_path,
+                    "llm_dir": llm_dir,
+                    "judge": judge,
+                    "batch_rows": batch_rows,
+                    "prompts": prompts_data,
+                    "scores_remote_path": scores_remote_path,
+                }
+            )
     return groups
 
 
-def _write_judge_scores_xlsx(local_path: Path, score_map: dict[str, dict[str, float]], models: list[str]) -> None:
-    """Write a two-sheet judge scores workbook: a "Scores" matrix and a
-    "Chart" sheet visualizing it.
+def _write_judge_scores_xlsx(local_path: Path, prompts_data: dict[str, dict[str, dict[str, float]]]) -> None:
+    """Write one judge's scores workbook: one sheet per jurisdiction prompt,
+    plus an "Overview" sheet comparing prompts against each other.
 
-    "Scores": header `["filename"] + models`, one row per stem (sorted),
+    Per-prompt sheet (named after the prompt, truncated to Excel's 31-char
+    limit): header `["filename"] + models`, one row per stem (sorted),
     numeric cell per (stem, model), blank (`None`, not 0) if unscored —
     blank is what makes `_missing_judge_cells` correctly treat it as
-    still-needs-scoring on a future run. "Chart": one
-    `openpyxl.chart.BarChart` built directly off the Scores sheet's cell
-    range — charts the matrix itself, no separate aggregation needed.
+    still-needs-scoring on a future run. A bar chart is embedded on the
+    same sheet, built directly off that sheet's own cell range.
+
+    "Overview" (first sheet): one row per prompt, one column per model,
+    cell = that (prompt, model)'s average score across all its stems — the
+    actual "compare prompts in this judge's jurisdiction" view, since the
+    per-prompt sheets alone only let you compare models within one prompt.
+    Plus its own bar chart (categories = prompts, one series per model).
 
     Full rewrite of the file's contents each call (old + new scores already
-    merged into `score_map` by the caller before this is invoked).
+    merged into each prompt's score map by the caller before this is
+    invoked).
 
     Args:
         local_path: Local path to save the workbook to.
-        score_map: `{stem: {model: score}}`.
-        models: All models to include as columns, in column order.
+        prompts_data: `{prompt: {stem: {model: score}}}` — every
+            jurisdiction prompt this judge has data for in this folder.
     """
     from openpyxl import Workbook
     from openpyxl.chart import BarChart, Reference
 
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Scores"
-    ws.append(["filename"] + models)
-    for stem in sorted(score_map):
-        ws.append([stem] + [score_map[stem].get(m) for m in models])
+    wb.remove(wb.active)
 
-    chart_sheet = wb.create_sheet("Chart")
-    chart = BarChart()
-    chart.type, chart.title = "col", "Scores"
-    chart.y_axis.title, chart.x_axis.title = "score", "transcript"
-    n_rows = len(score_map)
-    data = Reference(ws, min_col=2, max_col=1 + len(models), min_row=1, max_row=1 + n_rows)
-    cats = Reference(ws, min_col=1, min_row=2, max_row=1 + n_rows)
-    chart.add_data(data, titles_from_data=True)
-    chart.set_categories(cats)
-    chart_sheet.add_chart(chart, "A1")
+    overview_rows: list[tuple[str, dict[str, float]]] = []
+    for prompt in sorted(prompts_data):
+        score_map = prompts_data[prompt]
+        models = sorted({m for row in score_map.values() for m in row})
+        ws = wb.create_sheet(prompt[:31])
+        ws.append(["filename"] + models)
+        for stem in sorted(score_map):
+            ws.append([stem] + [score_map[stem].get(m) for m in models])
+
+        n_rows = len(score_map)
+        if models and n_rows:
+            chart = BarChart()
+            chart.type, chart.title = "col", prompt
+            chart.y_axis.title, chart.x_axis.title = "score", "transcript"
+            data = Reference(ws, min_col=2, max_col=1 + len(models), min_row=1, max_row=1 + n_rows)
+            cats = Reference(ws, min_col=1, min_row=2, max_row=1 + n_rows)
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(cats)
+            ws.add_chart(chart, ws.cell(row=1, column=len(models) + 3).coordinate)
+
+        averages = {
+            model: sum(row[model] for row in score_map.values() if model in row)
+            / sum(1 for row in score_map.values() if model in row)
+            for model in models
+            if any(model in row for row in score_map.values())
+        }
+        overview_rows.append((prompt, averages))
+
+    overview = wb.create_sheet("Overview", 0)
+    all_models = sorted({m for _, avg in overview_rows for m in avg})
+    overview.append(["prompt"] + all_models)
+    for prompt, avg in overview_rows:
+        overview.append([prompt] + [avg.get(m) for m in all_models])
+
+    n_prompts = len(overview_rows)
+    if all_models and n_prompts:
+        chart = BarChart()
+        chart.type, chart.title = "col", "Prompt comparison"
+        chart.y_axis.title, chart.x_axis.title = "avg score", "prompt"
+        data = Reference(overview, min_col=2, max_col=1 + len(all_models), min_row=1, max_row=1 + n_prompts)
+        cats = Reference(overview, min_col=1, min_row=2, max_row=1 + n_prompts)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        overview.add_chart(chart, overview.cell(row=1, column=len(all_models) + 3).coordinate)
+
     wb.save(local_path)
 
 
@@ -1137,14 +1245,14 @@ def _upload_judge_group_scores(client: Client, group: dict, tmp_dir: Path) -> No
 
     Args:
         client: WebDAV client.
-        group: One entry from `_collect_judge_scoring_groups`'s result,
-            with `existing_scores` already updated with this run's new
-            scores.
+        group: One entry from `_collect_judge_scoring_groups`'s result, with
+            each prompt's `existing_scores` already updated with this run's
+            new scores.
         tmp_dir: Local scratch directory for the upload.
     """
-    models = sorted({m for row in group["existing_scores"].values() for m in row})
+    prompts_data = {prompt: pdata["existing_scores"] for prompt, pdata in group["prompts"].items()}
     local = tmp_dir / Path(group["scores_remote_path"]).name
-    _write_judge_scores_xlsx(local, group["existing_scores"], models)
+    _write_judge_scores_xlsx(local, prompts_data)
     try:
         client.list(group["llm_dir"])
     except RemoteResourceNotFound:
@@ -1197,11 +1305,14 @@ async def _score_one_judge_cell(
             logger.error("Judge '%s': failed to download transcript for %s: %s", judge["name"], cell_job["stem"], exc)
 
     context = ""
+    extra_fields: dict[str, str] = {}
     row_data = _batch_row_for_transcript_stem(cell_job["stem"], cell_job["batch_rows"])
     if row_data is not None:
-        context = _sidecar_from_dict(row_data)["context"]
+        parsed_row = _sidecar_from_dict(row_data)
+        context = parsed_row["context"]
+        extra_fields = parsed_row["extra_fields"]
 
-    prompt = _render_judge_prompt(judge["template"], response_text, transcript, context)
+    prompt = _render_judge_prompt(judge["template"], response_text, transcript, context, extra_fields)
 
     if judge["kind"] == "logprob":
         content, logprobs_content = await _call_judge_llm(session, judge["llm"], prompt, want_logprobs=True)
@@ -1292,7 +1403,7 @@ async def main() -> None:
                     except FileNotFoundError as exc:
                         logger.error("%s Skipping %s.", exc, job["transcript_path"])
                         continue
-                    prompt = _render_prompt(template, transcript, job["context"])
+                    prompt = _render_prompt(template, transcript, job["context"], job["extra_fields"])
 
                     answer = await _call_llm(session, job["model"], prompt)
                     if answer is None:
@@ -1334,9 +1445,17 @@ async def main() -> None:
             if judges_by_root:
                 groups = _collect_judge_scoring_groups(client, batch_folders, folder_roots, judges_by_root, tmp_dir)
                 cell_jobs = [
-                    {**group, "stem": stem, "model": model, "output_name": filename}
+                    {
+                        **group,
+                        "prompt": prompt,
+                        "stem": stem,
+                        "model": model,
+                        "output_name": filename,
+                        "existing_scores": pdata["existing_scores"],
+                    }
                     for group in groups
-                    for stem, model, filename in _missing_judge_cells(group["cells"], group["existing_scores"])
+                    for prompt, pdata in group["prompts"].items()
+                    for stem, model, filename in _missing_judge_cells(pdata["cells"], pdata["existing_scores"])
                 ]
                 if cell_jobs:
                     # Same warm-model-grouping discipline as the main jobs loop.

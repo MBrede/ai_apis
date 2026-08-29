@@ -12,7 +12,12 @@ class TestParseSidecar:
     def test_empty_sidecar_falls_back_to_single_item_defaults(self, monkeypatch):
         monkeypatch.delenv("LLM_DEFAULT_MODEL", raising=False)
         parsed = _parse_sidecar("")
-        assert parsed == {"models": ["glm-4-7-flash"], "prompts": [DEFAULT_PROMPT], "context": ""}
+        assert parsed == {
+            "models": ["glm-4-7-flash"],
+            "prompts": [DEFAULT_PROMPT],
+            "context": "",
+            "extra_fields": {},
+        }
 
     def test_env_default_model_used_when_llm_field_absent(self, monkeypatch):
         monkeypatch.setenv("LLM_DEFAULT_MODEL", "qwen3-14b")
@@ -42,6 +47,14 @@ class TestParseSidecar:
         parsed = _parse_sidecar("stt: [turbo, qwen3-asr-1.7b]\n")
         assert "stt" not in parsed
 
+    def test_extra_field_passed_through(self):
+        parsed = _parse_sidecar("ground_truth: The user was confused by the RFID term.\n")
+        assert parsed["extra_fields"] == {"ground_truth": "The user was confused by the RFID term."}
+
+    def test_known_fields_excluded_from_extra_fields(self):
+        parsed = _parse_sidecar("stt: turbo\nllm: glm-4-7-flash\nprompt: summary\ncontext: hi\n")
+        assert parsed["extra_fields"] == {}
+
 
 class TestRenderPrompt:
     """Test the {transcript}/{context} template placeholder substitution."""
@@ -60,6 +73,15 @@ class TestRenderPrompt:
     def test_template_without_context_placeholder_ignores_context_arg(self):
         result = _render_prompt("Summarize: {transcript}", "hello", "unused context")
         assert result == "Summarize: hello"
+
+    def test_extra_field_placeholder_substituted(self):
+        result = _render_prompt(
+            "Ground truth: {ground_truth}\n{transcript}", "hello", extra_fields={"ground_truth": "expected answer"}
+        )
+        assert result == "Ground truth: expected answer\nhello"
+
+    def test_missing_extra_fields_arg_is_a_no_op(self):
+        assert _render_prompt("Summarize: {transcript}", "hello") == "Summarize: hello"
 
 
 class TestTranscriptStemMatching:

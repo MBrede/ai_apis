@@ -179,6 +179,12 @@ class TestRenderJudgePrompt:
     def test_unused_placeholders_are_a_no_op(self):
         assert _render_judge_prompt("Evaluate: {response}", "resp", "trans", "ctx") == "Evaluate: resp"
 
+    def test_extra_field_placeholder_substituted(self):
+        result = _render_judge_prompt(
+            "Ground truth: {ground_truth}\n{response}", "resp", extra_fields={"ground_truth": "expected"}
+        )
+        assert result == "Ground truth: expected\nresp"
+
 
 class TestScoreFromLabel:
     """Test label-reply parsing for both numeric and label scales."""
@@ -316,23 +322,61 @@ class TestScanPromptCells:
 
 
 class TestReadWriteJudgeScoresXlsx:
-    """Round-trip via a real workbook written to tmp_path."""
+    """Round-trip via a real workbook written to tmp_path.
+
+    One judge's workbook now covers every jurisdiction prompt at once (one
+    sheet per prompt + an "Overview" comparison sheet) instead of one file
+    per (judge, prompt) — this is what makes comparing a judge's take
+    across prompts possible without hunting across scattered files.
+    """
 
     def test_round_trip_excludes_blank_cells(self, tmp_path):
-        score_map = {"demo_a": {"glm-4-7-flash": 4.2}, "demo_b": {}}
-        path = tmp_path / "tone_summary_scores.xlsx"
-        _write_judge_scores_xlsx(path, score_map, ["glm-4-7-flash", "qwen3-14b"])
+        prompts_data = {"summary": {"demo_a": {"glm-4-7-flash": 4.2}, "demo_b": {}}}
+        path = tmp_path / "tone_scores.xlsx"
+        _write_judge_scores_xlsx(path, prompts_data)
         result = _read_judge_scores_xlsx(path)
-        assert result == {"demo_a": {"glm-4-7-flash": 4.2}}
+        assert result == {"summary": {"demo_a": {"glm-4-7-flash": 4.2}}}
 
-    def test_exactly_one_chart_present_after_write(self, tmp_path):
+    def test_multiple_prompts_get_separate_sheets(self, tmp_path):
+        prompts_data = {
+            "summary": {"demo_a": {"m1": 4.0}},
+            "rootcause": {"demo_a": {"m1": 2.0}},
+        }
+        path = tmp_path / "tone_scores.xlsx"
+        _write_judge_scores_xlsx(path, prompts_data)
+        result = _read_judge_scores_xlsx(path)
+        assert result == {
+            "summary": {"demo_a": {"m1": 4.0}},
+            "rootcause": {"demo_a": {"m1": 2.0}},
+        }
+
+    def test_overview_sheet_not_treated_as_a_prompt_on_read(self, tmp_path):
+        path = tmp_path / "tone_scores.xlsx"
+        _write_judge_scores_xlsx(path, {"summary": {"demo_a": {"m1": 3.0}}})
+        result = _read_judge_scores_xlsx(path)
+        assert "Overview" not in result
+
+    def test_overview_sheet_has_per_prompt_average(self, tmp_path):
         from openpyxl import load_workbook
 
-        path = tmp_path / "tone_summary_scores.xlsx"
-        _write_judge_scores_xlsx(path, {"demo_a": {"m1": 3.0}}, ["m1"])
+        prompts_data = {"summary": {"demo_a": {"m1": 4.0}, "demo_b": {"m1": 2.0}}}
+        path = tmp_path / "tone_scores.xlsx"
+        _write_judge_scores_xlsx(path, prompts_data)
+        wb = load_workbook(path, data_only=True)
+        overview = list(wb["Overview"].iter_rows(values_only=True))
+        assert overview[0] == ("prompt", "m1")
+        assert overview[1] == ("summary", 3.0)
+
+    def test_charts_present_per_prompt_sheet_and_overview(self, tmp_path):
+        from openpyxl import load_workbook
+
+        prompts_data = {"summary": {"demo_a": {"m1": 3.0}}, "rootcause": {"demo_a": {"m1": 4.0}}}
+        path = tmp_path / "tone_scores.xlsx"
+        _write_judge_scores_xlsx(path, prompts_data)
         wb = load_workbook(path)
-        assert "Chart" in wb.sheetnames
-        assert len(wb["Chart"]._charts) == 1
+        assert len(wb["summary"]._charts) == 1
+        assert len(wb["rootcause"]._charts) == 1
+        assert len(wb["Overview"]._charts) == 1
 
 
 class TestMissingJudgeCells:

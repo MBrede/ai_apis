@@ -227,6 +227,9 @@ def _parse_sidecar_stt(text: str) -> list[str]:
     return _stt_models_from_dict(yaml.safe_load(text) or {})
 
 
+BATCH_ROW_RESERVED_FIELDS = frozenset({"filename", "file", "context", *BATCH_ROW_LIST_FIELDS})
+
+
 def _row_to_sidecar_dict(row: dict[str, str]) -> dict:
     """Convert one batch.csv/batch.xlsx row into the same dict shape
     `yaml.safe_load()` produces for an equivalent per-file YAML sidecar.
@@ -234,7 +237,14 @@ def _row_to_sidecar_dict(row: dict[str, str]) -> dict:
     Args:
         row: Column name -> cell value (both already lowercased/stripped by
             the caller). `stt`/`llm`/`prompt` are comma-split into lists;
-            `context` is passed through as free text.
+            `context` is passed through as free text. Any OTHER column
+            (e.g. a user-added `ground_truth` column) is passed through
+            as-is too — sync_llm.py's `_sidecar_from_dict` exposes these as
+            `extra_fields`, usable as `{field_name}` placeholders in both
+            prompt and judge templates. Same passthrough happens naturally
+            for a YAML sidecar's own extra top-level keys, since
+            `yaml.safe_load` already keeps them — this function only needs
+            to not drop them for the batch-row path.
 
     Returns:
         Dict with only the keys that had a non-empty cell — same convention
@@ -249,6 +259,12 @@ def _row_to_sidecar_dict(row: dict[str, str]) -> dict:
     context = (row.get("context") or "").strip()
     if context:
         result["context"] = context
+    for key, value in row.items():
+        if key in BATCH_ROW_RESERVED_FIELDS:
+            continue
+        value = (value or "").strip()
+        if value:
+            result[key] = value
     return result
 
 
