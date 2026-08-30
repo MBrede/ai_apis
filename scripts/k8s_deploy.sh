@@ -212,6 +212,70 @@ echo "==> Writing ${OUTPUT_VALUES}"
 # Helper: emit a YAML string value, or empty string if unset
 val() { printf '%s' "${1:-}"; }
 
+# Auto-detect a service's most-recently-pushed tag, for services that get
+# hotfixed/rebuilt independently of a full k8s_deploy.sh run (bot,
+# nextcloud-llm-sync) — querying the registry directly means the deployed
+# tag never silently goes stale just because *_IMAGE_TAG_OVERRIDE in .env
+# didn't get updated by hand. Private registry only (htpasswd/Basic-auth
+# Registry v2 API, credentials read from the same ~/.docker/config.json
+# `docker push` already uses) — Docker Hub needs a different (bearer-token)
+# auth flow and isn't used by this deployment, so this silently no-ops
+# there and the caller falls back to global.imageTag. Compares each tag's
+# image config `created` timestamp (ISO 8601, same format/offset across
+# tags since all builds happen on the same machine — plain string
+# comparison sorts them correctly without needing `date` parsing).
+latest_registry_tag() {
+    local image_name="$1"
+    if [[ "${REGISTRY}" == "docker.io" ]]; then
+        return 0
+    fi
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        echo "==> WARNING: curl/jq not found, cannot auto-detect latest tag for ${image_name}" >&2
+        return 0
+    fi
+
+    local auth
+    auth=$(python3 -c "
+import json
+try:
+    with open('${HOME}/.docker/config.json') as f:
+        cfg = json.load(f)
+    print(cfg['auths']['${REGISTRY}']['auth'])
+except Exception:
+    pass
+" 2>/dev/null)
+    if [[ -z "${auth}" ]]; then
+        echo "==> WARNING: no stored registry credentials for ${REGISTRY}, cannot auto-detect latest tag for ${image_name}" >&2
+        return 0
+    fi
+
+    local tags
+    tags=$(curl -sf -H "Authorization: Basic ${auth}" \
+        "https://${REGISTRY}/v2/${REPO}/${image_name}/tags/list" | jq -r '.tags[]?' 2>/dev/null) || true
+    if [[ -z "${tags}" ]]; then
+        return 0
+    fi
+
+    local best_tag="" best_created=""
+    while IFS= read -r tag; do
+        [[ -z "${tag}" ]] && continue
+        local digest created
+        digest=$(curl -sf -H "Authorization: Basic ${auth}" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "https://${REGISTRY}/v2/${REPO}/${image_name}/manifests/${tag}" | jq -r '.config.digest? // empty') || continue
+        [[ -z "${digest}" ]] && continue
+        created=$(curl -sf -H "Authorization: Basic ${auth}" \
+            "https://${REGISTRY}/v2/${REPO}/${image_name}/blobs/${digest}" | jq -r '.created? // empty') || continue
+        [[ -z "${created}" ]] && continue
+        if [[ -z "${best_created}" || "${created}" > "${best_created}" ]]; then
+            best_created="${created}"
+            best_tag="${tag}"
+        fi
+    done <<< "${tags}"
+
+    printf '%s' "${best_tag}"
+}
+
 # Helper: turn a comma-separated folder string (NEXTCLOUD_FOLDER's .env
 # format, unchanged from before multi-folder support) into a YAML list
 # literal, e.g. "a,b" -> ["a", "b"]. values.yaml's nextcloudFolders is a
@@ -308,7 +372,7 @@ keda:
 
 telegramBot:
   image: ai-apis-bot
-  imageTag: "$(val "${BOT_IMAGE_TAG_OVERRIDE:-}")"
+  imageTag: "$(val "${BOT_IMAGE_TAG_OVERRIDE:-$(latest_registry_tag ai-apis-bot)}")"
   token: "$(val "${TELEGRAM_TOKEN}")"
   ollamaHost: "$(val "${OLLAMA_HOST:-}")"
   ollamaPort: ${OLLAMA_PORT:-2345}
@@ -327,7 +391,7 @@ nextcloudSync:
   whisperTimeout: "$(val "${WHISPER_TIMEOUT:-3600}")"
 
 nextcloudLlmSync:
-  imageTag: "$(val "${NEXTCLOUD_LLM_IMAGE_TAG_OVERRIDE:-}")"
+  imageTag: "$(val "${NEXTCLOUD_LLM_IMAGE_TAG_OVERRIDE:-$(latest_registry_tag ai-apis-nextcloud)}")"
   schedule: "$(val "${NEXTCLOUD_LLM_SCHEDULE:-15,45 * * * *}")"
   nextcloudFolders: $(nextcloud_folders_yaml "${NEXTCLOUD_LLM_FOLDER:-}")
   llmUrl: "$(val "${LLM_URL:-http://kubeai.llm.svc.cluster.local/openai/v1}")"
