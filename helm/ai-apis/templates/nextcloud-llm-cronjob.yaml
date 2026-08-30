@@ -31,7 +31,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: nextcloud-llm-sync
-              image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.nextcloudSync.image) }}
+              image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.nextcloudSync.image "imageTag" .Values.nextcloudLlmSync.imageTag) }}
               imagePullPolicy: Always
               command: ["python", "-m", "src.nextcloud.sync_llm"]
               env:
@@ -46,7 +46,7 @@ spec:
                 - name: NEXTCLOUD_PASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: ai-apis-secrets
+                      name: ai-apis-infisical-secrets
                       key: nextcloudPassword
                 # Defaults to the same folder tree the whisper job scans —
                 # override only if the LLM job should watch a subset of it.

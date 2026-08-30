@@ -13,6 +13,13 @@ global:
   # Default image tag applied to all service images
   imageTag: latest
 
+  # When true, templates/secret.yaml renders nothing and every consumer
+  # reads from an externally-managed `ai-apis-infisical-secrets` Secret
+  # instead (e.g. populated by External Secrets Operator from a secrets
+  # manager). Set to false to fall back to this chart creating its own
+  # `ai-apis-secrets` from the values below (the original behavior).
+  externalSecret: true
+
   # Name of a docker-registry Secret (already created in this namespace)
   # to use as an imagePullSecret on every pod. Required when imageRegistry
   # points at the private registry (auth-gated even for pulls, see
@@ -70,7 +77,7 @@ whisper:
   # (qwen3-asr and hojo-asr split into their own containers/PVCs 2026-08-24
   # — see whisperQwen3asr/whisperHojoasr below — their dependency pins were
   # genuinely incompatible with this container's transformers>=5.8).
-  cacheStorage: 20Gi
+  cacheStorage: 40Gi
 
   # Default Whisper model to load on startup (e.g. turbo, large-v3)
   defaultModel: turbo
@@ -168,6 +175,11 @@ textClassification:
 telegramBot:
   # Docker image name (without registry/repository prefix)
   image: ai-apis-bot
+
+  # Optional: overrides global.imageTag for this service only. Useful for
+  # a fast hotfix tag applied to just the bot without rebuilding/retagging
+  # every other service in the chart. Leave empty to use global.imageTag.
+  imageTag: ""
 
   # Telegram Bot API token obtained from @BotFather
   token: ""
@@ -278,6 +290,11 @@ nextcloudSync:
 # ai_apis/src/nextcloud/README_llm.md.
 # ============================================================
 nextcloudLlmSync:
+  # Optional: overrides global.imageTag for this job only (shares
+  # nextcloudSync.image, but can run a different build of it). Leave
+  # empty to use global.imageTag.
+  imageTag: ""
+
   # Cron schedule for the LLM sync job. Every 30min is safe — skips any
   # sidecar whose output already exists (see sync_llm.py), so a no-op run
   # just exits fast and cheap. Offset 15min after nextcloudSync.schedule

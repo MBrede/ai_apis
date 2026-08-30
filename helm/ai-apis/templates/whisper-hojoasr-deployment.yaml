@@ -40,12 +40,12 @@ spec:
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: apiKey
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: whisperHfToken
             - name: WHISPER_PORT
               value: {{ .Values.whisperHojoasr.port | quote }}

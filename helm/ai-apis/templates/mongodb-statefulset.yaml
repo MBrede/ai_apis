@@ -34,12 +34,12 @@ spec:
             - name: MONGO_INITDB_ROOT_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: mongoRootUser
             - name: MONGO_INITDB_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: mongoRootPassword
             - name: MONGO_INITDB_DATABASE
               value: {{ .Values.mongodb.database | quote }}

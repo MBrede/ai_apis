@@ -42,22 +42,22 @@ spec:
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: apiKey
             - name: ADMIN_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: adminApiKey
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: sdHfToken
             - name: CIVIT_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: civitKey
             - name: SD_PORT
               value: {{ .Values.stableDiffusion.port | quote }}
@@ -70,12 +70,12 @@ spec:
             - name: MONGO_USER
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: mongoRootUser
             - name: MONGO_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: mongoRootPassword
             - name: MONGODB_URL
               value: {{ include "ai-apis.mongodbUrl" . | quote }}

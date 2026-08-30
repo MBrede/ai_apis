@@ -61,7 +61,7 @@ spec:
                 - name: NEXTCLOUD_PASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: ai-apis-secrets
+                      name: ai-apis-infisical-secrets
                       key: nextcloudPassword
                 - name: NEXTCLOUD_FOLDER
                   value: {{ .Values.nextcloudSync.nextcloudFolders | join "," | quote }}
@@ -71,7 +71,7 @@ spec:
                 - name: WHISPER_API_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: ai-apis-secrets
+                      name: ai-apis-infisical-secrets
                       key: apiKey
                 - name: NUM_SPEAKERS
                   value: {{ .Values.nextcloudSync.numSpeakers | quote }}

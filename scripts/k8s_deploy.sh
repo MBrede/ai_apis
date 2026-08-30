@@ -274,7 +274,7 @@ whisper:
   image: ai-apis-whisper
   port: 8080
   hfToken: "$(val "${HF_TOKEN}")"
-  cacheStorage: 20Gi
+  cacheStorage: 40Gi
   defaultModel: "$(val "${DEFAULT_WHISPER_MODEL:-turbo}")"
   ingress:
     host: "$(val "${WHISPER_INGRESS_HOST:-whisper.example.com}")"
@@ -308,6 +308,7 @@ keda:
 
 telegramBot:
   image: ai-apis-bot
+  imageTag: "$(val "${BOT_IMAGE_TAG_OVERRIDE:-}")"
   token: "$(val "${TELEGRAM_TOKEN}")"
   ollamaHost: "$(val "${OLLAMA_HOST:-}")"
   ollamaPort: ${OLLAMA_PORT:-2345}
@@ -326,6 +327,7 @@ nextcloudSync:
   whisperTimeout: "$(val "${WHISPER_TIMEOUT:-3600}")"
 
 nextcloudLlmSync:
+  imageTag: "$(val "${NEXTCLOUD_LLM_IMAGE_TAG_OVERRIDE:-}")"
   schedule: "$(val "${NEXTCLOUD_LLM_SCHEDULE:-15,45 * * * *}")"
   nextcloudFolders: $(nextcloud_folders_yaml "${NEXTCLOUD_LLM_FOLDER:-}")
   llmUrl: "$(val "${LLM_URL:-http://kubeai.llm.svc.cluster.local/openai/v1}")"

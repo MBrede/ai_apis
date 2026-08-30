@@ -62,7 +62,7 @@ Usage:
 {{- define "ai-apis.image" -}}
 {{- $registry   := .root.Values.global.imageRegistry   | default "docker.io" -}}
 {{- $repository := .root.Values.global.imageRepository | required "global.imageRepository must be set" -}}
-{{- $tag        := .root.Values.global.imageTag        | default "latest" -}}
+{{- $tag        := .imageTag | default .root.Values.global.imageTag | default "latest" -}}
 {{- printf "%s/%s/%s:%s" $registry $repository .imageName $tag -}}
 {{- end }}
 
@@ -114,7 +114,7 @@ Include in a container's env list with:
 - name: KEYCLOAK_CLIENT_SECRET
   valueFrom:
     secretKeyRef:
-      name: ai-apis-secrets
+      name: ai-apis-infisical-secrets
       key: keycloakClientSecret
 - name: KEYCLOAK_ADMIN_ROLE
   value: {{ .Values.keycloak.adminRole | quote }}

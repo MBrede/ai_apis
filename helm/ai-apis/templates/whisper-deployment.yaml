@@ -40,12 +40,12 @@ spec:
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: apiKey
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: whisperHfToken
             - name: DEFAULT_WHISPER_MODEL
               value: {{ .Values.whisper.defaultModel | quote }}
@@ -70,12 +70,12 @@ spec:
             - name: MONGO_USER
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: mongoRootUser
             - name: MONGO_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: ai-apis-secrets
+                  name: ai-apis-infisical-secrets
                   key: mongoRootPassword
             - name: MONGODB_URL
               value: {{ include "ai-apis.mongodbUrl" . | quote }}
