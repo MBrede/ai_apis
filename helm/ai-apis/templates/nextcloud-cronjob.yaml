@@ -81,6 +81,9 @@ spec:
                   value: {{ .Values.nextcloudSync.maxSpeakers | quote }}
                 - name: WHISPER_TIMEOUT
                   value: {{ .Values.nextcloudSync.whisperTimeout | quote }}
+                # Max transcription calls in flight at once, PER target container.
+                - name: WHISPER_CONCURRENCY
+                  value: {{ .Values.nextcloudSync.whisperConcurrency | quote }}
                 {{- include "ai-apis.keycloakEnv" . | nindent 16 }}
               resources:
                 requests:

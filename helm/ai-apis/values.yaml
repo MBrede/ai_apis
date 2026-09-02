@@ -282,6 +282,13 @@ nextcloudSync:
   # Timeout in seconds for a single Whisper transcription request
   whisperTimeout: "3600"
 
+  # Max transcription calls in flight at once, PER target container (the
+  # primary container and each of its qwen3-asr/hojo-asr sidecar containers
+  # get their own independent budget). Lower than llmConcurrency below on
+  # purpose — this hits GPU inference directly, no request-queuing serving
+  # layer like vLLM in front of it.
+  whisperConcurrency: "3"
+
 # ============================================================
 # Nextcloud LLM post-processing (Kubernetes CronJob)
 # Independent of nextcloudSync above — never transcribes, only runs a
@@ -319,6 +326,13 @@ nextcloudLlmSync:
   # (weights not yet on the KubeAI cache PVC) can take up to ~12 minutes,
   # not just the 30-60s of a warm cold-start — kept well above that.
   llmTimeout: "900"
+
+  # Max LLM calls in flight at once (main jobs loop + judge-scoring pass).
+  # KubeAI/vLLM serves concurrent requests per model with continuous
+  # batching (no --max-num-seqs override in the catalog, so the vLLM
+  # default, ~256, is far above this) — raise if throughput still looks
+  # concurrency-bound rather than per-call-latency-bound.
+  llmConcurrency: "10"
 
   # Kill switch for the judges/*.yaml LLM-as-judge pass. Set to false to
   # disable judging cluster-wide without deleting every judges/*.yaml —

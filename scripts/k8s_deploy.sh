@@ -402,6 +402,7 @@ nextcloudSync:
   minSpeakers: "$(val "${MIN_SPEAKERS:-}")"
   maxSpeakers: "$(val "${MAX_SPEAKERS:-}")"
   whisperTimeout: "$(val "${WHISPER_TIMEOUT:-3600}")"
+  whisperConcurrency: "$(val "${WHISPER_CONCURRENCY:-3}")"
 
 nextcloudLlmSync:
   imageTag: "$(val "${NEXTCLOUD_LLM_IMAGE_TAG_OVERRIDE:-$(latest_registry_tag ai-apis-nextcloud)}")"
@@ -410,6 +411,7 @@ nextcloudLlmSync:
   llmUrl: "$(val "${LLM_URL:-http://kubeai.llm.svc.cluster.local/openai/v1}")"
   llmDefaultModel: "$(val "${LLM_DEFAULT_MODEL:-glm-4-7-flash}")"
   llmTimeout: "$(val "${LLM_TIMEOUT:-900}")"
+  llmConcurrency: "$(val "${LLM_CONCURRENCY:-10}")"
 YAML
 
 echo "Done. To deploy:"
