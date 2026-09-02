@@ -134,6 +134,16 @@ file per row:
   `{field_name}` placeholder in prompt AND judge templates — see "Arbitrary
   extra fields" under "Judges" below.
 
+A batch-covered folder also gets one reviewable `llm/results_table.xlsx`,
+rebuilt fresh whenever a job uploads something new: **one sheet per LLM
+model**, columns are prompts, rows are transcript stems (STT-model suffix
+included when `stt:` was a list), cells are that (stem, model, prompt)
+combination's output text (blank if not processed yet) — so you can eyeball
+one model's output across all its prompts on a single sheet, then flip
+sheets to compare another model. Individual `.md` files under `llm/` still
+exist unchanged; this is a convenience view on top of them, not a
+replacement.
+
 ### Live example
 
 `/Shared/transcription (2)/batch_example/` has a working demo: three
@@ -261,8 +271,8 @@ can see how a judge rates `summary` vs. `rootcause` outputs side by side in
 one file instead of hunting across several.
 
 **Scope**: judging only applies to **batch-file-driven folders** (folders
-with a `batch.csv`/`batch.xlsx`) — same limitation the `<prompt>_table.xlsx`
-review tables above already have, since that's the only place a cell's
+with a `batch.csv`/`batch.xlsx`) — same limitation the `results_table.xlsx`
+review table above already has, since that's the only place a cell's
 existence is already tracked. Plain per-file-sidecar folders get no judge
 scores (see Roadmap).
 
@@ -423,6 +433,7 @@ Nextcloud folder/            (one entry of NEXTCLOUD_FOLDER's comma-separated li
 │   └── interview_01.srt
 └── llm/
     ├── interview_01_glm-4-7-flash_summary.md   # written by this job
+    ├── results_table.xlsx                       # one sheet per LLM model, columns = prompts (batch folders only)
     └── tone-quality_scores.xlsx                 # written by the judge pass — one file per judge,
                                                   # one sheet per jurisdiction prompt (batch folders only)
 ```
@@ -456,6 +467,12 @@ file looks "unprocessed" under the new naming scheme and gets reprocessed
 once — this is deliberate, not a bug, and is the direct consequence of
 making per-model tracking correct. Old `<stem>_<prompt>.md` files are never
 deleted automatically; clean them up manually if desired.
+
+**Review table migration (2026-09-02)**: the batch-folder review table moved
+from one `<prompt>_table.xlsx` per prompt (columns = models) to a single
+`results_table.xlsx` (one sheet per model, columns = prompts). Old
+`<prompt>_table.xlsx` files are orphaned, not deleted automatically — clean
+them up manually if desired.
 
 **Judge output naming migration (2026-08-28)**: judge score files moved
 from `<judge>_<prompt>_scores.xlsx` (one per judge+prompt pair) to
@@ -493,6 +510,12 @@ LLM_TIMEOUT=900
 # cluster-wide without deleting every judges/*.yaml (e.g. if kind: logprob
 # misbehaves in production before it's been verified). Default: enabled.
 LLM_JUDGE_ENABLED=true
+
+# Max LLM calls in flight at once in the main jobs loop. Found live
+# 2026-09-02: a fully sequential loop took up to 4h to process one prompt
+# across many files — each call is dominated by generation time, not I/O,
+# and KubeAI/vLLM already serves concurrent requests per model.
+LLM_CONCURRENCY=10
 ```
 
 ## Running

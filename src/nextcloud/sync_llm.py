@@ -91,6 +91,14 @@ DEFAULT_PROMPT = "summary"
 # budget would cut it off mid-thought before it ever reaches the answer.
 JUDGE_TOP_LOGPROBS = 20
 
+# Found live 2026-09-02: a fully sequential jobs loop took up to 4h to process
+# one prompt across many files — each LLM call is dominated by generation
+# time (seconds to low minutes), not I/O, and KubeAI/vLLM already serves
+# concurrent requests per model. `LLM_CONCURRENCY` bounds how many _call_llm
+# calls run in flight at once (env override for tuning per-cluster GPU
+# capacity without a code change).
+LLM_CONCURRENCY = int(os.environ.get("LLM_CONCURRENCY", "10"))
+
 
 # ---------------------------------------------------------------------------
 # Sidecar / job discovery
@@ -346,14 +354,14 @@ def _scan_prompt_cells(
 
 
 def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str, dict], tmp_dir: Path) -> None:
-    """Build one llm/<prompt>_table.xlsx per distinct prompt used in this
-    folder's batch.csv/batch.xlsx.
+    """Build one llm/results_table.xlsx for this folder's batch.csv/batch.xlsx,
+    one sheet per LLM model, columns are prompts.
 
     Batch-input usability feature: a customer who uploaded many files via a
-    batch sheet gets one reviewable table per prompt instead of only
-    scattered individual .md files (which still exist, unchanged) — rows
-    are transcript stems (STT-model suffix included when `stt:` was a
-    list), columns are LLM models, cells are that (stem, model, prompt)
+    batch sheet gets one reviewable workbook instead of only scattered
+    individual .md files (which still exist, unchanged) — each model's
+    sheet has rows = transcript stems (STT-model suffix included when `stt:`
+    was a list), columns = prompts, cells = that (stem, model, prompt)
     combination's output text (blank if not processed yet). Fully rebuilt
     from whatever's actually in llm/ right now (not incrementally appended)
     whenever called — the caller in `main()` only calls this for folders
@@ -374,33 +382,42 @@ def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str,
 
     from openpyxl import Workbook
 
+    # Invert {prompt: {stem: {model: filename}}} -> {model: {stem: {prompt: filename}}}
+    by_model: dict[str, dict[str, dict[str, str]]] = {}
     for prompt, rows in cells.items():
-        models = sorted({model for row in rows.values() for model in row})
-        wb = Workbook()
-        ws = wb.active
-        ws.append(["filename"] + models)
-        for transcript_stem in sorted(rows):
-            row_values = [transcript_stem]
-            for model in models:
-                output_name = rows[transcript_stem].get(model)
+        for stem, models in rows.items():
+            for model, output_name in models.items():
+                by_model.setdefault(model, {}).setdefault(stem, {})[prompt] = output_name
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    for model in sorted(by_model):
+        stems = by_model[model]
+        prompts = sorted({prompt for row in stems.values() for prompt in row})
+        ws = wb.create_sheet(model[:31])
+        ws.append(["filename"] + prompts)
+        for stem in sorted(stems):
+            row_values = [stem]
+            for prompt in prompts:
+                output_name = stems[stem].get(prompt)
                 text = ""
                 if output_name:
                     try:
                         text = _download_text(client, llm_dir + output_name, tmp_dir)
                     except Exception as exc:
-                        logger.error("Failed to download %s for %s_table.xlsx: %s", output_name, prompt, exc)
+                        logger.error("Failed to download %s for results_table.xlsx: %s", output_name, exc)
                 row_values.append(text)
             ws.append(row_values)
 
-        local_path = tmp_dir / f"{prompt}_table.xlsx"
-        wb.save(local_path)
-        remote_out = llm_dir + f"{prompt}_table.xlsx"
-        try:
-            client.upload_sync(local_path=str(local_path), remote_path=remote_out)
-            logger.info("Uploaded %s", remote_out)
-        except Exception as exc:
-            logger.error("Upload failed for %s: %s", remote_out, exc)
-        local_path.unlink(missing_ok=True)
+    local_path = tmp_dir / "results_table.xlsx"
+    wb.save(local_path)
+    remote_out = llm_dir + "results_table.xlsx"
+    try:
+        client.upload_sync(local_path=str(local_path), remote_path=remote_out)
+        logger.info("Uploaded %s", remote_out)
+    except Exception as exc:
+        logger.error("Upload failed for %s: %s", remote_out, exc)
+    local_path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1408,7 +1425,16 @@ async def main() -> None:
             prompt_cache: dict[str, str] = {}
             timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                for job in tqdm(jobs, desc="Processing"):
+                # Prompts are prepared up front (webdav downloads are fast,
+                # local-network I/O) so the actual bottleneck — each LLM
+                # call's own generation time — can run with up to
+                # LLM_CONCURRENCY calls in flight at once instead of one at a
+                # time. Preparation stays in `jobs`' model-grouped order, and
+                # asyncio.gather schedules tasks in that same order, so the
+                # warm-model-window benefit of the sort above is preserved
+                # even though completion order is no longer sequential.
+                prepared = []
+                for job in jobs:
                     try:
                         transcript = _download_text(client, job["transcript_path"], tmp_dir)
                     except Exception as exc:
@@ -1423,8 +1449,17 @@ async def main() -> None:
                         logger.error("%s Skipping %s.", exc, job["transcript_path"])
                         continue
                     prompt = _render_prompt(template, transcript, job["context"], job["extra_fields"])
+                    prepared.append((job, prompt))
 
-                    answer = await _call_llm(session, job["model"], prompt)
+                semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
+
+                async def _run_call(job: dict, prompt: str) -> tuple[dict, str | None]:
+                    async with semaphore:
+                        return job, await _call_llm(session, job["model"], prompt)
+
+                tasks = [asyncio.ensure_future(_run_call(job, prompt)) for job, prompt in prepared]
+                for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Processing"):
+                    job, answer = await coro
                     if answer is None:
                         continue
 
