@@ -27,6 +27,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import uuid
 from collections import Counter
 
 import aiohttp
@@ -216,6 +217,29 @@ def _audio_duration_seconds(audio_path: str) -> float:
     return len(whisperx.load_audio(audio_path)) / 16000
 
 
+def _unique_upload_path(filename: str) -> str:
+    """Local path to save one upload to — never the bare original filename.
+
+    Found live 2026-09-02: two nextcloud-sync jobs (a manual trigger
+    overlapping the regular cron tick) sent overlapping requests for files
+    with the same name; since uploads were written to `file.filename`
+    directly (a fixed, shared path), one request's cleanup (`os.remove`)
+    deleted the file while another's ffmpeg decode was still reading it,
+    surfacing as a generic non-zero ffmpeg exit. A uuid-prefixed path makes
+    every upload's on-disk file unique per request regardless of source —
+    concurrent requests (overlapping schedules, or a future multi-replica
+    whisper deployment) can never collide. The suffix is preserved since
+    ffmpeg/whisperx's format detection can consult it.
+
+    Args:
+        filename: The uploaded file's original name (for its extension).
+
+    Returns:
+        A unique local path in the system temp directory.
+    """
+    return os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}_{os.path.basename(filename)}")
+
+
 @router.post("/transcribe/")
 async def transcribe(
     file: UploadFile, model_to_use: str = "turbo", api_key: str = Depends(verify_api_key)
@@ -225,13 +249,14 @@ async def transcribe(
         logger.info(f"Loading Whisper model on request: {model_to_use}")
         await asyncio.to_thread(whisper_buffer.load_model, model_to_use)
 
-    with open(file.filename, "wb") as f:
+    local_path = _unique_upload_path(file.filename)
+    with open(local_path, "wb") as f:
         file_contents = await file.read()
         f.write(file_contents)
 
-    result = await asyncio.to_thread(whisper_buffer.transcribe, file.filename, verbose=False)
+    result = await asyncio.to_thread(whisper_buffer.transcribe, local_path, verbose=False)
     answer = result["text"]
-    os.remove(file.filename)
+    os.remove(local_path)
     return {"answer": answer}
 
 
@@ -281,7 +306,8 @@ async def transcribe_diarize(
     lang_limit = top_n_languages if top_n_languages and top_n_languages > 0 else None
     filler_prompt = FILLER_PROMPT if include_fillers else None
 
-    with open(file.filename, "wb") as f:
+    local_path = _unique_upload_path(file.filename)
+    with open(local_path, "wb") as f:
         file_contents = await file.read()
         f.write(file_contents)
 
@@ -295,15 +321,15 @@ async def transcribe_diarize(
 
             chunks = await asyncio.to_thread(
                 buf.transcribe_and_diarize,
-                file.filename,
+                local_path,
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
                 align=align,
                 initial_prompt=filler_prompt if backend == "whisperx" else None,
             )
-            audio_duration = await asyncio.to_thread(_audio_duration_seconds, file.filename)
-            os.remove(file.filename)
+            audio_duration = await asyncio.to_thread(_audio_duration_seconds, local_path)
+            os.remove(local_path)
             answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
             return {
                 "answer": answer,
@@ -323,13 +349,13 @@ async def transcribe_diarize(
 
             chunks = await asyncio.to_thread(
                 diarize_audio,
-                file.filename,
+                local_path,
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )
-            audio_duration = await asyncio.to_thread(_audio_duration_seconds, file.filename)
-            os.remove(file.filename)
+            audio_duration = await asyncio.to_thread(_audio_duration_seconds, local_path)
+            os.remove(local_path)
             answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
             return {
                 "answer": answer,
@@ -356,12 +382,12 @@ async def transcribe_diarize(
             if top_n_languages is not None:
                 proxy_params["top_n_languages"] = top_n_languages
 
-            result = await _proxy_transcribe_and_diarize(PROXY_URLS[backend], file.filename, proxy_params)
-            os.remove(file.filename)
+            result = await _proxy_transcribe_and_diarize(PROXY_URLS[backend], local_path, proxy_params)
+            os.remove(local_path)
             return result
 
         else:
-            os.remove(file.filename)
+            os.remove(local_path)
             raise HTTPException(
                 status_code=404,
                 detail=f"Backend '{backend}' is not available on this container and no proxy is configured for it.",
