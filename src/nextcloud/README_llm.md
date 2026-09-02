@@ -146,25 +146,25 @@ replacement.
 
 ### Live example
 
-`/Shared/transcription (2)/batch_example/` has a working demo: three
-duplicated audio files (`demo_01.m4a`, `demo_02.m4a`, `demo_03.m4a`) and a
-`batch.xlsx` with one row each — `demo_03`'s row deliberately omits the
+`/Shared/transcription (3)/batch_example/` has a working demo: three
+duplicated audio files (`demo_a.m4a`, `demo_b.m4a`, `demo_c.m4a`) and a
+`batch.xlsx` with one row each — `demo_c`'s row deliberately omits the
 extension in `filename` to show that both forms match. Produces:
 
 ```
-transcriptions/demo_01_turbo.txt
-llm/demo_01_turbo_glm-4-7-flash_summary.md
+transcriptions/demo_a_turbo.txt
+llm/demo_a_turbo_glm-4-7-flash_summary.md
 
-transcriptions/demo_02_turbo.txt
-transcriptions/demo_02_qwen3-asr-1.7b.txt
-llm/demo_02_turbo_glm-4-7-flash_summary.md
-llm/demo_02_turbo_glm-4-7-flash_rootcause.md
-llm/demo_02_qwen3-asr-1.7b_glm-4-7-flash_summary.md
-llm/demo_02_qwen3-asr-1.7b_glm-4-7-flash_rootcause.md
+transcriptions/demo_b_turbo.txt
+transcriptions/demo_b_qwen3-asr-1.7b.txt
+llm/demo_b_turbo_glm-4-7-flash_summary.md
+llm/demo_b_turbo_glm-4-7-flash_rootcause.md
+llm/demo_b_qwen3-asr-1.7b_glm-4-7-flash_summary.md
+llm/demo_b_qwen3-asr-1.7b_glm-4-7-flash_rootcause.md
 
-transcriptions/demo_03_turbo.txt
-llm/demo_03_turbo_glm-4-7-flash_summary.md
-llm/demo_03_turbo_qwen3-14b_summary.md
+transcriptions/demo_c_turbo.txt
+llm/demo_c_turbo_glm-4-7-flash_summary.md
+llm/demo_c_turbo_qwen3-14b_summary.md
 ```
 
 ## Available LLMs
