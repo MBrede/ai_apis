@@ -511,10 +511,11 @@ LLM_TIMEOUT=900
 # misbehaves in production before it's been verified). Default: enabled.
 LLM_JUDGE_ENABLED=true
 
-# Max LLM calls in flight at once in the main jobs loop. Found live
-# 2026-09-02: a fully sequential loop took up to 4h to process one prompt
-# across many files — each call is dominated by generation time, not I/O,
-# and KubeAI/vLLM already serves concurrent requests per model.
+# Max LLM calls in flight at once — shared by the main jobs loop AND the
+# judge-scoring pass. Found live 2026-09-02: a fully sequential loop took
+# up to 4h to process one prompt across many files — each call is
+# dominated by generation time, not I/O, and KubeAI/vLLM already serves
+# concurrent requests per model.
 LLM_CONCURRENCY=10
 ```
 

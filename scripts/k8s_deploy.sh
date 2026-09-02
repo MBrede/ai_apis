@@ -256,13 +256,26 @@ except Exception:
         return 0
     fi
 
+    local accept_header="application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json"
+
     local best_tag="" best_created=""
     while IFS= read -r tag; do
         [[ -z "${tag}" ]] && continue
-        local digest created
-        digest=$(curl -sf -H "Authorization: Basic ${auth}" \
-            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "https://${REGISTRY}/v2/${REPO}/${image_name}/manifests/${tag}" | jq -r '.config.digest? // empty') || continue
+        local manifest digest created
+        manifest=$(curl -sf -H "Authorization: Basic ${auth}" -H "Accept: ${accept_header}" \
+            "https://${REGISTRY}/v2/${REPO}/${image_name}/manifests/${tag}") || continue
+        digest=$(echo "${manifest}" | jq -r '.config.digest? // empty')
+        if [[ -z "${digest}" ]]; then
+            # A multi-arch OCI image index (e.g. buildx with provenance/
+            # attestation enabled, seen when building on a remote host —
+            # found live 2026-09-02) has no top-level .config; look up the
+            # linux/amd64 entry's own manifest instead.
+            local sub_digest
+            sub_digest=$(echo "${manifest}" | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' | head -1)
+            [[ -z "${sub_digest}" ]] && continue
+            digest=$(curl -sf -H "Authorization: Basic ${auth}" -H "Accept: ${accept_header}" \
+                "https://${REGISTRY}/v2/${REPO}/${image_name}/manifests/${sub_digest}" | jq -r '.config.digest? // empty') || continue
+        fi
         [[ -z "${digest}" ]] && continue
         created=$(curl -sf -H "Authorization: Basic ${auth}" \
             "https://${REGISTRY}/v2/${REPO}/${image_name}/blobs/${digest}" | jq -r '.created? // empty') || continue

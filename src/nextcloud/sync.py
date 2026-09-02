@@ -632,6 +632,16 @@ async def _transcribe_file(
 TRUNCATION_MIN_GAP_SECONDS = 5.0
 TRUNCATION_MIN_GAP_FRACTION = 0.1
 
+# Max whisper transcription calls in flight at once, PER target container
+# (see "container_group" below — the primary container and each of its
+# qwen3-asr/hojo-asr sidecars get their own independent budget, since they're
+# separate GPU-scaled deployments and shouldn't compete for the same slots).
+# Lower than sync_llm.py's LLM_CONCURRENCY (default 10) on purpose — this
+# hits actual GPU inference directly (no request-queuing serving layer like
+# vLLM in front of it), so too much concurrency risks CUDA OOM rather than
+# just queuing. Env-tunable per cluster GPU headroom.
+WHISPER_CONCURRENCY = int(os.environ.get("WHISPER_CONCURRENCY", "3"))
+
 
 def _detect_possible_truncation(segments: list[dict], audio_duration: float | None) -> str | None:
     """Flag a transcript whose last segment ends well before the real audio ends.
@@ -693,7 +703,15 @@ async def main() -> None:
 
         timeout = aiohttp.ClientTimeout(total=int(os.environ.get("WHISPER_TIMEOUT", "3600")))
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            for item in tqdm(work_items, desc="Processing"):
+            # Downloads (webdav I/O, cheap) stay sequential; only the actual
+            # whisper call is parallelized below, bounded by WHISPER_CONCURRENCY.
+            # local_audio is index-prefixed rather than output_stem-derived —
+            # two different source folders can share a filename (e.g. two
+            # projects both containing "Neue Aufnahme 27.m4a"), which was only
+            # safe under the old strictly-one-at-a-time loop; concurrent
+            # transcription needs a guaranteed-unique local path per item.
+            prepared = []
+            for idx, item in enumerate(work_items):
                 file_info: dict = item["file"]
                 stt_model: str | None = item["stt_model"]
                 remote_path: str = file_info["path"]
@@ -701,27 +719,62 @@ async def main() -> None:
                 stem = Path(remote_path).stem
                 output_stem = f"{stem}_{stt_model}" if stt_model else stem
                 suffix = Path(remote_path).suffix or ".wav"
-                local_audio = tmp_dir / f"{output_stem}{suffix}"
+                local_audio = tmp_dir / f"{idx}_{output_stem}{suffix}"
 
-                # Download
                 try:
                     client.download_sync(remote_path=remote_path, local_path=str(local_audio))
                 except Exception as exc:
                     logger.error("Download failed for %s: %s", remote_path, exc)
                     continue
 
-                # Transcribe (speaker count from filename, then env vars)
                 try:
                     diarize_params = _build_diarize_params(stem, model_override=stt_model)
                 except ValueError as exc:
                     logger.error("Skipping %s: %s", remote_path, exc)
                     local_audio.unlink(missing_ok=True)
                     continue
-                result = await _transcribe_file(str(local_audio), mime_type, diarize_params, session)
-                local_audio.unlink(missing_ok=True)
+
+                prepared.append(
+                    {
+                        "remote_path": remote_path,
+                        "output_stem": output_stem,
+                        "local_audio": local_audio,
+                        "mime_type": mime_type,
+                        "diarize_params": diarize_params,
+                        # "qwen3-asr" and "hojo-asr" run in their own separate
+                        # containers/GPU-scaled deployments (see
+                        # whisper_api.py's module docstring) — everything else
+                        # (whisperx/ark-asr/granite-speech/nemotron-asr) is
+                        # handled by the primary container. Each group gets
+                        # its own concurrency budget below so items destined
+                        # for one container don't eat into another's queue.
+                        "container_group": _backend_for_stt_model(stt_model) if stt_model else "whisperx",
+                    }
+                )
+
+            proxied_groups = {"qwen3-asr", "hojo-asr"}
+            semaphores: dict[str, asyncio.Semaphore] = {}
+
+            def _semaphore_for(group: str) -> asyncio.Semaphore:
+                key = group if group in proxied_groups else "primary"
+                if key not in semaphores:
+                    semaphores[key] = asyncio.Semaphore(WHISPER_CONCURRENCY)
+                return semaphores[key]
+
+            async def _run_transcribe(p: dict) -> tuple[dict, tuple[list[dict], float | None] | None]:
+                async with _semaphore_for(p["container_group"]):
+                    result = await _transcribe_file(str(p["local_audio"]), p["mime_type"], p["diarize_params"], session)
+                p["local_audio"].unlink(missing_ok=True)
+                return p, result
+
+            tasks = [asyncio.ensure_future(_run_transcribe(p)) for p in prepared]
+            for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Processing"):
+                p, result = await coro
                 if result is None:
                     continue
                 segments, audio_duration = result
+                remote_path = p["remote_path"]
+                output_stem = p["output_stem"]
 
                 # Write and upload outputs
                 remote_dir = str(Path(remote_path).parent)

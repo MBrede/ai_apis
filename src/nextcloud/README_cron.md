@@ -44,6 +44,15 @@ NUM_SPEAKERS=2
 # Optional overrides (defaults shown)
 # WHISPER_MODEL=turbo
 # WHISPER_TIMEOUT=3600
+
+# Max transcription calls in flight at once, PER target container — the
+# primary container and each of its qwen3-asr/hojo-asr sidecar containers
+# (see README_llm.md's "Architecture note") get their own independent
+# budget, since they're separate GPU-scaled deployments. Lower than
+# sync_llm.py's LLM_CONCURRENCY on purpose: this hits GPU inference
+# directly (no request-queuing serving layer like vLLM in front of it), so
+# too much concurrency risks CUDA OOM rather than just queuing.
+# WHISPER_CONCURRENCY=3
 ```
 
 `WHISPER_URL` and `WHISPER_API_KEY` are set automatically by docker-compose

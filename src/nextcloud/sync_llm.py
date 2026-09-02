@@ -1529,8 +1529,22 @@ async def main() -> None:
 
                     timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
                     async with aiohttp.ClientSession(timeout=timeout) as session:
-                        for cj in tqdm(cell_jobs, desc="Judging"):
-                            score = await _score_one_judge_cell(client, session, cj, tmp_dir)
+                        # Same bounded-concurrency treatment as the main jobs
+                        # loop above — up to LLM_CONCURRENCY judge calls in
+                        # flight at once (same KubeAI/vLLM backend, same
+                        # generation-time-dominated bottleneck). The per-group
+                        # "upload once all its cells are attempted" countdown
+                        # below is order-independent, so it's unaffected by
+                        # cells now completing out of order.
+                        semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
+
+                        async def _run_judge_cell(cj: dict) -> tuple[dict, float | str | None]:
+                            async with semaphore:
+                                return cj, await _score_one_judge_cell(client, session, cj, tmp_dir)
+
+                        tasks = [asyncio.ensure_future(_run_judge_cell(cj)) for cj in cell_jobs]
+                        for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Judging"):
+                            cj, score = await coro
                             if score is not None:
                                 cj["existing_scores"].setdefault(cj["stem"], {})[cj["model"]] = score
                                 touched_paths.add(cj["scores_remote_path"])
