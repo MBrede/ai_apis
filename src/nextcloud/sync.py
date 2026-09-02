@@ -587,7 +587,7 @@ async def _transcribe_file(
     mime_type: str,
     params: dict[str, str | int],
     session: aiohttp.ClientSession,
-) -> list[dict] | None:
+) -> tuple[list[dict], float | None] | None:
     """POST a file to the Whisper diarization endpoint.
 
     Args:
@@ -597,7 +597,10 @@ async def _transcribe_file(
         session: Shared aiohttp session.
 
     Returns:
-        List of segment dicts on success, None on failure.
+        `(segments, audio_duration)` on success — `audio_duration` in
+        seconds, `None` if the whisper API response predates this field
+        (older deployed image) rather than a hard failure. `None` (not a
+        tuple) on request failure.
     """
     whisper_url = os.environ.get("WHISPER_URL", "http://whisper:8080")
     endpoint = f"{whisper_url.rstrip('/')}/transcribe_and_diarize/"
@@ -615,10 +618,55 @@ async def _transcribe_file(
                         f"Transcription failed for {filename} (HTTP {resp.status}): {body}"
                     )
                     return None
-                return json.loads(await resp.read())["answer"]
+                body = json.loads(await resp.read())
+                return body["answer"], body.get("audio_duration")
     except Exception as exc:
         warnings.warn(f"Error transcribing {filename}: {exc}")
         return None
+
+
+# A transcript is only flagged if it falls short by BOTH an absolute margin
+# and a proportional one — small trailing silence (someone leaving the mic
+# on, applause) shouldn't trip this; a backend cutting off well before the
+# real end of the file should.
+TRUNCATION_MIN_GAP_SECONDS = 5.0
+TRUNCATION_MIN_GAP_FRACTION = 0.1
+
+
+def _detect_possible_truncation(segments: list[dict], audio_duration: float | None) -> str | None:
+    """Flag a transcript whose last segment ends well before the real audio ends.
+
+    A cheap, blunt signal for backend-side truncation (e.g. a generation-length
+    cap cutting a chunk off early, or a diarized speaker turn fed to a model
+    far outside its validated input length) — not a precise content check,
+    and it can't catch truncation mid-file (only at the very end of the
+    transcribed output). Found live: qwen3-asr's transformers-backend
+    `max_new_tokens` defaulted to 512, badly truncating anything beyond a
+    short clip (see `stt_backends/qwen3_asr.py`).
+
+    Args:
+        segments: This file's merged speaker segments (may be empty) — the
+            same list `_format_as_text`/`_format_as_srt` render, with
+            `"START"`/`"DURATION"` keys per `merge_speaker_segments`.
+        audio_duration: Real audio duration in seconds, as reported by the
+            whisper API (see `_audio_duration_seconds` in whisper_api.py),
+            or `None` if the response predates that field (older deployed
+            image) — no check is possible then, not treated as a failure.
+
+    Returns:
+        A human-readable "Obacht" message if truncation looks likely, else `None`.
+    """
+    if not audio_duration:
+        return None
+    last_end = max((s["START"] + s["DURATION"] for s in segments), default=0.0)
+    gap = audio_duration - last_end
+    if gap > TRUNCATION_MIN_GAP_SECONDS and gap > audio_duration * TRUNCATION_MIN_GAP_FRACTION:
+        return (
+            f"Obacht: dieses Transkript ist evtl. abgeschnitten — die letzte Zeile endet bei "
+            f"{last_end:.1f}s, aber die Audiodatei ist {audio_duration:.1f}s lang "
+            f"({gap:.1f}s / {gap / audio_duration:.0%} fehlen am Ende)."
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -669,10 +717,11 @@ async def main() -> None:
                     logger.error("Skipping %s: %s", remote_path, exc)
                     local_audio.unlink(missing_ok=True)
                     continue
-                segments = await _transcribe_file(str(local_audio), mime_type, diarize_params, session)
+                result = await _transcribe_file(str(local_audio), mime_type, diarize_params, session)
                 local_audio.unlink(missing_ok=True)
-                if segments is None:
+                if result is None:
                     continue
+                segments, audio_duration = result
 
                 # Write and upload outputs
                 remote_dir = str(Path(remote_path).parent)
@@ -691,6 +740,28 @@ async def main() -> None:
                     except Exception as exc:
                         logger.error("Upload failed for %s: %s", remote_out, exc)
                     local_out.unlink(missing_ok=True)
+
+                obacht = _detect_possible_truncation(segments, audio_duration)
+                obacht_remote = transcript_dir + f"{output_stem}_OBACHT.txt"
+                if obacht:
+                    logger.warning("%s: %s", output_stem, obacht)
+                    local_obacht = tmp_dir / f"{output_stem}_OBACHT.txt"
+                    local_obacht.write_text(obacht, encoding="utf-8")
+                    try:
+                        client.upload_sync(local_path=str(local_obacht), remote_path=obacht_remote)
+                    except Exception as exc:
+                        logger.error("Upload failed for %s: %s", obacht_remote, exc)
+                    local_obacht.unlink(missing_ok=True)
+                else:
+                    # Clear a stale flag from a previous run (e.g. re-run
+                    # with a fixed backend/config) rather than leaving a
+                    # now-inaccurate warning sitting next to a good transcript.
+                    try:
+                        client.clean(obacht_remote)
+                    except RemoteResourceNotFound:
+                        pass
+                    except Exception as exc:
+                        logger.error("Failed to clear stale flag %s: %s", obacht_remote, exc)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

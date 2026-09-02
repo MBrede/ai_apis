@@ -6,9 +6,12 @@ Whisper-encoder + Qwen decoder, loaded via `transformers` with
 `trust_remote_code=True` (no dedicated PyPI package, per the model card,
 checked 2026-08-20). Its `generate()` API returns plain text with no
 word-level timestamps, so this is a `DiarizeFirstASRBuffer` — diarize the
-whole file first (pyannote speaker turns), then transcribe each turn. This
-also works around the model's documented 30s-per-call audio limit for free
-(diarize turns are naturally short).
+whole file first (pyannote speaker turns), then transcribe each turn.
+Pyannote turns are NOT guaranteed to stay under the model's documented
+30s-per-call limit on their own (an uninterrupted monologue turn can run
+much longer) — `MAX_TURN_SECONDS` below has `_diarize_then_transcribe`
+sub-chunk any turn that exceeds it, so the model is never actually fed
+audio outside its validated input length.
 
 Verified against a real deploy (2026-08-21), two fixes from the initial
 implementation:
@@ -35,6 +38,7 @@ from .base import DiarizeFirstASRBuffer
 class ArkASRBuffer(DiarizeFirstASRBuffer):
     MODEL_ID = "Audio8/ARK-ASR-3B"
     DEFAULT_LANGUAGE = "German"
+    MAX_TURN_SECONDS = 25.0  # model's documented per-call limit is 30s; small margin
 
     def __init__(self):
         super().__init__()
@@ -63,6 +67,14 @@ class ArkASRBuffer(DiarizeFirstASRBuffer):
         if self.timer:
             self.timer.start()
 
+    # 256 was plausible for the model's documented 30s-per-call limit at
+    # typical speech density, but qwen3-asr's identical class of bug (a
+    # too-small transformers-backend max_new_tokens default silently
+    # truncating real transcripts) turned out to bite in practice —
+    # quadrupled for safety margin rather than assuming 256 was actually
+    # enough for dense/fast speech.
+    ARK_MAX_NEW_TOKENS = 1024
+
     def _transcribe_chunk(self, chunk) -> str:
         """Run one ARK generate() call on a <=30s float32 16kHz audio slice."""
         conversation = [
@@ -82,6 +94,6 @@ class ArkASRBuffer(DiarizeFirstASRBuffer):
             return_dict=True,
         ).to(self.device, dtype=self.dtype)
         with torch.no_grad():
-            output_ids = self.model.generate(**inputs, do_sample=False, max_new_tokens=256)
+            output_ids = self.model.generate(**inputs, do_sample=False, max_new_tokens=self.ARK_MAX_NEW_TOKENS)
         new_tokens = output_ids[:, inputs["input_ids"].shape[1] :]
         return self.processor.batch_decode(new_tokens, skip_special_tokens=True)[0]

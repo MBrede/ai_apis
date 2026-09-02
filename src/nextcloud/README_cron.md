@@ -134,6 +134,45 @@ SPEAKER_00: Hello, welcome to the interview.
 SPEAKER_01: Thank you for having me.
 ```
 
+## Truncation warning (`_OBACHT.txt`)
+
+Found live (2026-08-30): `qwen3-asr`'s underlying library defaults to a
+generation-length cap (`max_new_tokens`) far too small for a full audio
+chunk, silently producing a transcript that stops well before the audio
+actually ends — no error, no visible sign in the output file itself. Fixed
+at the source (see `src/audio/stt_backends/qwen3_asr.py`), but as a general
+safety net this job now also checks, for every file it transcribes, whether
+the last transcript line ends notably earlier than the audio's real
+duration:
+
+```
+transcriptions/
+├── interview_01.txt
+├── interview_01.srt
+└── interview_01_OBACHT.txt   # only present if truncation looks likely
+```
+
+**Presence of `<stem>_OBACHT.txt` means "check this one by hand"** — it's a
+blunt, cheap heuristic (compares the transcript's last timestamp against the
+audio's real length), not a precise content check, and it can't catch
+truncation that happens mid-file rather than right at the end. Absence of
+the file doesn't guarantee a perfect transcript, just that this particular
+failure mode wasn't detected. The flag is cleared automatically on a
+re-run once a transcript no longer looks truncated (e.g. after fixing the
+underlying cause and re-processing), so a stale warning doesn't linger next
+to a since-corrected file.
+
+A closely related but separate risk: for backends that diarize first and
+transcribe each speaker turn separately (`ark-asr`, `hojo-asr`,
+`nemotron-asr`), pyannote's speaker turns have no guaranteed maximum
+duration — an uninterrupted monologue can produce one very long turn, which
+used to get fed to the model whole regardless of that model's own real
+per-call audio-length limit. `ark-asr` (documented 30s-per-call limit) now
+sub-chunks any turn exceeding that before transcribing (see
+`_diarize_then_transcribe` in `stt_backends/base.py`); `nemotron-asr` and
+`hojo-asr` have no confirmed documented limit, so they're left as-is rather
+than guessing a number.
+
 ## Whisper pre-warming
 
 Whisper scales to zero when idle (KEDA scale-from-zero). If the CronJob fires

@@ -36,6 +36,7 @@ def _diarize_then_transcribe(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     sample_rate: int = 16000,
+    max_turn_seconds: float | None = None,
 ) -> list[dict]:
     """Diarize first, then run `transcribe_segment(audio_slice) -> str` once per
     pyannote speaker turn.
@@ -44,8 +45,18 @@ def _diarize_then_transcribe(
     (ARK-ASR-3B, Hojo-ASR-V1, Nemotron-3.5-ASR) — gives real per-turn
     speaker labels without needing word-level alignment, unlike
     WhisperX/Qwen3-ASR/Granite-Speech's transcribe-then-align-then-diarize
-    path. Also sidesteps any per-call audio-length limit those models have
-    (e.g. ARK-ASR-3B's 30s cap), since diarize turns are naturally short.
+    path.
+
+    Pyannote has no guaranteed max turn duration — an uninterrupted
+    monologue produces one long turn, not naturally-short ones. `max_turn_seconds`
+    (a backend's own documented per-call limit, e.g. ARK-ASR-3B's 30s) sub-splits
+    any turn exceeding it into consecutive same-speaker sub-chunks before
+    transcribing, so a long turn doesn't get fed to the model far outside
+    its validated input length — found live as a real (not just theoretical)
+    truncation source, same bug class as an undersized max_new_tokens.
+    Sub-chunks share the original turn's speaker label, so
+    `merge_speaker_segments` stitches them back into one coherent turn in
+    the final output — no separate re-joining logic needed here.
     """
     diarize_kwargs: dict = {}
     if num_speakers is not None:
@@ -59,12 +70,17 @@ def _diarize_then_transcribe(
     segments = []
     for row in diarize_segments.itertuples():
         start, end = float(row.start), float(row.end)
-        chunk = audio[int(start * sample_rate) : int(end * sample_rate)]
-        if len(chunk) == 0:
-            continue
-        text = transcribe_segment(chunk)
-        if text.strip():
-            segments.append({"start": start, "end": end, "text": text, "speaker": row.speaker})
+        sub_starts = [start]
+        if max_turn_seconds:
+            sub_starts = [start + i * max_turn_seconds for i in range(int((end - start) // max_turn_seconds) + 1)]
+        for sub_start in sub_starts:
+            sub_end = min(sub_start + max_turn_seconds, end) if max_turn_seconds else end
+            chunk = audio[int(sub_start * sample_rate) : int(sub_end * sample_rate)]
+            if len(chunk) == 0:
+                continue
+            text = transcribe_segment(chunk)
+            if text.strip():
+                segments.append({"start": sub_start, "end": sub_end, "text": text, "speaker": row.speaker})
     return segments
 
 
@@ -236,9 +252,16 @@ class DiarizeFirstASRBuffer(DiarizingASRBuffer):
     Hojo-ASR-V1, Nemotron-3.5-ASR.
 
     Subclasses set `DEFAULT_LANGUAGE` and implement `_transcribe_chunk(chunk) -> str`.
+    Subclasses SHOULD also set `MAX_TURN_SECONDS` to their model's real
+    documented per-call audio-length limit — pyannote turns have no
+    guaranteed max duration, so without this an uninterrupted monologue
+    turn gets fed to the model far outside its validated input length (see
+    `_diarize_then_transcribe`'s docstring). `None` (the default) disables
+    sub-chunking, matching pre-fix behavior for a backend that hasn't set it.
     """
 
     DEFAULT_LANGUAGE: str = "English"
+    MAX_TURN_SECONDS: float | None = None
 
     def _transcribe_chunk(self, chunk) -> str:
         raise NotImplementedError
@@ -268,5 +291,6 @@ class DiarizeFirstASRBuffer(DiarizingASRBuffer):
             num_speakers=num_speakers,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
+            max_turn_seconds=self.MAX_TURN_SECONDS,
         )
         return merge_speaker_segments(segments, language=self.DEFAULT_LANGUAGE)

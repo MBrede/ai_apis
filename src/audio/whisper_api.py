@@ -190,6 +190,32 @@ def diarize_audio(
     return out
 
 
+def _audio_duration_seconds(audio_path: str) -> float:
+    """Return an audio/video file's duration in seconds.
+
+    Used so the caller (sync.py) can flag a transcript whose last segment
+    ends well before the real end of the file — a cheap sanity check for
+    silent truncation (e.g. a generation-length cap cutting a backend off
+    mid-chunk, see qwen3_asr.py's max_new_tokens fix). Reuses
+    `whisperx.load_audio` (already a hard dependency in every container
+    that reaches this code — every backend's own `transcribe_and_diarize`
+    calls it) rather than adding a new dependency (ffmpeg/soundfile don't
+    reliably handle every container format Nextcloud users upload, e.g.
+    m4a, without extra system packages); the redundant second decode is
+    cheap next to actual transcription time for the short recordings this
+    pipeline handles.
+
+    Args:
+        audio_path: Local path to the uploaded audio/video file.
+
+    Returns:
+        Duration in seconds.
+    """
+    import whisperx
+
+    return len(whisperx.load_audio(audio_path)) / 16000
+
+
 @router.post("/transcribe/")
 async def transcribe(
     file: UploadFile, model_to_use: str = "turbo", api_key: str = Depends(verify_api_key)
@@ -276,9 +302,15 @@ async def transcribe_diarize(
                 align=align,
                 initial_prompt=filler_prompt if backend == "whisperx" else None,
             )
+            audio_duration = await asyncio.to_thread(_audio_duration_seconds, file.filename)
             os.remove(file.filename)
             answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
-            return {"answer": answer, "backend": backend, "removed_chunks": len(chunks) - len(answer)}
+            return {
+                "answer": answer,
+                "backend": backend,
+                "removed_chunks": len(chunks) - len(answer),
+                "audio_duration": audio_duration,
+            }
 
         elif backend == "whisper" and "whisper" in LOCAL_BACKENDS:
             if not whisper_buffer.is_loaded() or whisper_buffer.model_name != model_to_use:
@@ -296,9 +328,15 @@ async def transcribe_diarize(
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )
+            audio_duration = await asyncio.to_thread(_audio_duration_seconds, file.filename)
             os.remove(file.filename)
             answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
-            return {"answer": answer, "backend": backend, "removed_chunks": len(chunks) - len(answer)}
+            return {
+                "answer": answer,
+                "backend": backend,
+                "removed_chunks": len(chunks) - len(answer),
+                "audio_duration": audio_duration,
+            }
 
         elif backend in PROXY_URLS:
             proxy_params = {

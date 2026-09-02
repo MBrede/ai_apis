@@ -6,6 +6,7 @@ import openpyxl
 
 from src.nextcloud.sync import (
     _backend_for_stt_model,
+    _detect_possible_truncation,
     _make_webdav_client,
     _normalize_list,
     _parse_sidecar_stt,
@@ -234,3 +235,41 @@ class TestReadBatchXlsx:
 
         rows = _read_batch_xlsx(xlsx_path)
         assert len(rows) == 1
+
+
+class TestDetectPossibleTruncation:
+    """Test the end-of-transcript-vs-audio-duration truncation heuristic.
+
+    Found live: qwen3-asr's transformers-backend max_new_tokens defaulted
+    to 512, badly truncating anything beyond a short clip — this check is
+    a cheap, blunt safety net for that class of bug, not a precise one.
+    """
+
+    def _segments(self, *ends: float) -> list[dict]:
+        return [{"START": 0.0, "DURATION": end, "SPEAKER": "SPEAKER_00", "TRANSCRIPTION": "x"} for end in ends]
+
+    def test_no_audio_duration_skips_check(self):
+        assert _detect_possible_truncation(self._segments(10.0), None) is None
+
+    def test_transcript_covers_full_duration_no_flag(self):
+        assert _detect_possible_truncation(self._segments(298.0), 300.0) is None
+
+    def test_small_trailing_gap_not_flagged(self):
+        # Natural trailing silence — under both the absolute and proportional threshold.
+        assert _detect_possible_truncation(self._segments(298.0), 300.0) is None
+        assert _detect_possible_truncation(self._segments(3.0), 4.0) is None  # 1s/4s=25% but <5s absolute
+
+    def test_badly_truncated_transcript_flagged(self):
+        # Matches the real qwen3-asr bug shape: a 300s chunk producing only ~40s of output.
+        msg = _detect_possible_truncation(self._segments(40.0), 300.0)
+        assert msg is not None
+        assert "Obacht" in msg
+
+    def test_empty_segments_with_real_audio_flagged(self):
+        msg = _detect_possible_truncation([], 60.0)
+        assert msg is not None
+
+    def test_requires_both_absolute_and_proportional_margin(self):
+        # 8s gap on a 1000s file is proportionally tiny (0.8%) — not flagged
+        # despite exceeding the absolute-seconds threshold alone.
+        assert _detect_possible_truncation(self._segments(992.0), 1000.0) is None

@@ -61,6 +61,13 @@ class Qwen3ASRBuffer(AlignThenDiarizeASRBuffer):
                 device_map=self.device,
                 forced_aligner=self.QWEN_ALIGNER_REPO,
                 forced_aligner_kwargs=dict(dtype=dtype, device_map=self.device),
+                # qwen_asr's own transformers-backend default is 512 — found
+                # live producing badly truncated transcripts for anything
+                # beyond a short clip (a full MAX_CHUNK_SECONDS=300s window
+                # of German speech needs far more than 512 tokens). The
+                # library's own vLLM-backend default for this same model is
+                # 4096; doubled for extra headroom on dense/fast speech.
+                max_new_tokens=8192,
             )
 
         self._load_or_cleanup(_load)
