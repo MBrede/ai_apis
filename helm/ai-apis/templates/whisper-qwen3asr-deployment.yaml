@@ -9,6 +9,14 @@ metadata:
   annotations:
     helm.sh/chart: {{ include "ai-apis.chart" . }}
 spec:
+  # RollingUpdate (the default) tries to create a new pod before killing the
+  # old one — impossible here since both would need the same RWO PVC at
+  # once, and if the old pod is unhealthy and never reaches Ready (e.g. a
+  # bad image tag), the rollout deadlocks forever with the old pod stuck
+  # holding the volume. Found live 2026-09-03. Recreate kills the old pod
+  # first, unconditionally.
+  strategy:
+    type: Recreate
   # Only one replica is supported because the GPU PVC is ReadWriteOnce.
   # When keda.enabled, replicas are managed by the HTTPScaledObject (can be 0).
   {{- if not .Values.keda.enabled }}
@@ -32,7 +40,7 @@ spec:
         {{- include "ai-apis.researchGpuToleration" . | nindent 8 }}
       containers:
         - name: whisper-qwen3asr
-          image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.whisperQwen3asr.image) }}
+          image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.whisperQwen3asr.image "imageTag" .Values.whisperQwen3asr.imageTag) }}
           imagePullPolicy: Always
           ports:
             - name: http

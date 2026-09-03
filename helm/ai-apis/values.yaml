@@ -86,6 +86,13 @@ whisper:
   # whisper_api.py's LOCAL_BACKENDS. Comma-separated backend names.
   localBackends: "whisperx,granite-speech,ark-asr,nemotron-asr,whisper"
 
+  # Optional: overrides global.imageTag for this service only — see
+  # telegramBot.imageTag's comment for why this matters. Found live
+  # 2026-09-03: a nextcloud-only rebuild moved global.imageTag to a tag
+  # that was never built for ai-apis-whisper, silently breaking it
+  # (ImagePullBackOff) until the next unrelated deploy overwrote it again.
+  imageTag: ""
+
   ingress:
     # Hostname for the Whisper Ingress resource (external, with TLS)
     host: whisper.example.com
@@ -104,6 +111,11 @@ whisperQwen3asr:
   image: ai-apis-whisper-qwen3asr
   port: 8080
   cacheStorage: 10Gi
+  # Optional: overrides global.imageTag for this service only — see
+  # telegramBot.imageTag's comment for why this matters (built/pushed
+  # independently of other services, so global.imageTag can silently point
+  # at a tag that was never actually built for this image).
+  imageTag: ""
 
 # ============================================================
 # Hojo-ASR-only whisper backend (split from `whisper` above — see its
@@ -114,6 +126,9 @@ whisperHojoasr:
   image: ai-apis-whisper-hojoasr
   port: 8080
   cacheStorage: 15Gi
+  # Optional: overrides global.imageTag for this service only — see
+  # telegramBot.imageTag's comment for why this matters.
+  imageTag: ""
 
 # ============================================================
 # Stable Diffusion image-generation API
@@ -239,6 +254,12 @@ keycloak:
 nextcloudSync:
   # Docker image name (without registry/repository prefix)
   image: ai-apis-nextcloud
+
+  # Optional: overrides global.imageTag for this service only — see
+  # telegramBot.imageTag's comment for why this matters. Shares an image
+  # with nextcloudLlmSync (which already had this override); this one was
+  # missing it and broke live 2026-09-03 the same way whisper did.
+  imageTag: ""
 
   # Cron schedule for the sync job. Every 30min is safe here — sync_llm.py
   # and the whisper sync are both incremental (skip files already processed,

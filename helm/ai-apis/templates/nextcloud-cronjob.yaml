@@ -47,7 +47,7 @@ spec:
                   sleep 30
           containers:
             - name: nextcloud-sync
-              image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.nextcloudSync.image) }}
+              image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.nextcloudSync.image "imageTag" .Values.nextcloudSync.imageTag) }}
               imagePullPolicy: Always
               env:
                 - name: NEXTCLOUD_URL

@@ -353,10 +353,21 @@ whisper:
   hfToken: "$(val "${HF_TOKEN}")"
   cacheStorage: 40Gi
   defaultModel: "$(val "${DEFAULT_WHISPER_MODEL:-turbo}")"
+  # Built/pushed independently of other services (see build docs) — without
+  # this, global.imageTag (the git SHA of whatever this script was last run
+  # for) can point at a tag that was never actually built for this image.
+  # Found live 2026-09-03: a nextcloud-only rebuild broke whisper this way.
+  imageTag: "$(val "${WHISPER_IMAGE_TAG_OVERRIDE:-$(latest_registry_tag ai-apis-whisper)}")"
   ingress:
     host: "$(val "${WHISPER_INGRESS_HOST:-whisper.example.com}")"
     tls: ${WHISPER_INGRESS_TLS:-false}
     internalHost: "$(val "${WHISPER_INTERNAL_HOST:-whisper-internal.cluster.local}")"
+
+whisperQwen3asr:
+  imageTag: "$(val "${WHISPER_QWEN3ASR_IMAGE_TAG_OVERRIDE:-$(latest_registry_tag ai-apis-whisper-qwen3asr)}")"
+
+whisperHojoasr:
+  imageTag: "$(val "${WHISPER_HOJOASR_IMAGE_TAG_OVERRIDE:-$(latest_registry_tag ai-apis-whisper-hojoasr)}")"
 
 stableDiffusion:
   image: ai-apis-stable-diffusion
@@ -392,6 +403,7 @@ telegramBot:
 
 nextcloudSync:
   image: ai-apis-nextcloud
+  imageTag: "$(val "${NEXTCLOUD_IMAGE_TAG_OVERRIDE:-$(latest_registry_tag ai-apis-nextcloud)}")"
   schedule: "$(val "${NEXTCLOUD_SCHEDULE:-0,30 * * * *}")"
   nextcloudUrl: "$(val "${NEXTCLOUD_URL:-}")"
   nextcloudUser: "$(val "${NEXTCLOUD_USER:-}")"
