@@ -3,7 +3,15 @@ Tests for sync_llm.py's cartesian llm x prompt scheduling, context injection,
 and multi-folder prompt-cache namespacing.
 """
 
-from src.nextcloud.sync_llm import DEFAULT_PROMPT, _parse_sidecar, _render_prompt
+import pytest
+
+from src.nextcloud.sync_llm import (
+    DEFAULT_PROMPT,
+    _json_schema_for_fields,
+    _load_prompt_template,
+    _parse_sidecar,
+    _render_prompt,
+)
 
 
 class TestParseSidecar:
@@ -132,3 +140,106 @@ class TestCartesianJobScheduling:
         assert [j["model"] for j in jobs] == ["a", "a", "b", "b"]
         # Intra-group relative order preserved (stability).
         assert [j["prompt"] for j in jobs] == ["p1", "p2", "p1", "p2"]
+
+
+class TestJsonSchemaForFields:
+    """Test the response_format JSON schema built from a structured prompt's fields:."""
+
+    def test_every_field_becomes_a_required_string_property(self):
+        schema = _json_schema_for_fields({"summary": "one paragraph", "action_items": "bullet list"})
+        props = schema["json_schema"]["schema"]["properties"]
+        assert props == {
+            "summary": {"type": "string", "description": "one paragraph"},
+            "action_items": {"type": "string", "description": "bullet list"},
+        }
+        assert schema["json_schema"]["schema"]["required"] == ["summary", "action_items"]
+
+    def test_response_format_type_is_json_schema(self):
+        schema = _json_schema_for_fields({"x": "y"})
+        assert schema["type"] == "json_schema"
+        assert schema["json_schema"]["schema"]["type"] == "object"
+
+
+class TestLoadPromptTemplate:
+    """Test .md (plain) vs .yaml/.yml (structured) prompt loading."""
+
+    class _FakeClient:
+        def __init__(self, files):
+            self._files = files
+            self.download_count = 0
+
+        def download_sync(self, remote_path, local_path):
+            self.download_count += 1
+            if remote_path not in self._files:
+                from webdav3.exceptions import RemoteResourceNotFound
+
+                raise RemoteResourceNotFound(remote_path)
+            from pathlib import Path
+
+            Path(local_path).write_text(self._files[remote_path], encoding="utf-8")
+
+    def test_plain_md_prompt_has_no_fields(self, tmp_path):
+        client = self._FakeClient({"root/prompts/summary.md": "Summarize: {transcript}"})
+        result = _load_prompt_template(client, "root", "summary", tmp_path, {})
+        assert result == {"template": "Summarize: {transcript}", "fields": None}
+
+    def test_yaml_prompt_returns_template_and_fields(self, tmp_path):
+        yaml_text = """
+prompt: "Summarize: {transcript}"
+fields:
+  summary: one paragraph
+  action_items: bullet list
+"""
+        client = self._FakeClient({"root/prompts/notes.yaml": yaml_text})
+        result = _load_prompt_template(client, "root", "notes", tmp_path, {})
+        assert result == {
+            "template": "Summarize: {transcript}",
+            "fields": {"summary": "one paragraph", "action_items": "bullet list"},
+        }
+
+    def test_yml_extension_also_works(self, tmp_path):
+        yaml_text = "prompt: hi {transcript}\nfields:\n  x: description\n"
+        client = self._FakeClient({"root/prompts/notes.yml": yaml_text})
+        result = _load_prompt_template(client, "root", "notes", tmp_path, {})
+        assert result["fields"] == {"x": "description"}
+
+    def test_yaml_takes_precedence_over_md(self, tmp_path):
+        client = self._FakeClient(
+            {
+                "root/prompts/notes.yaml": "prompt: yaml version\nfields:\n  x: y\n",
+                "root/prompts/notes.md": "md version",
+            }
+        )
+        result = _load_prompt_template(client, "root", "notes", tmp_path, {})
+        assert result["template"] == "yaml version"
+
+    def test_yaml_missing_fields_raises(self, tmp_path):
+        client = self._FakeClient({"root/prompts/notes.yaml": "prompt: hi\n"})
+        with pytest.raises(ValueError, match="fields"):
+            _load_prompt_template(client, "root", "notes", tmp_path, {})
+
+    def test_yaml_missing_prompt_raises(self, tmp_path):
+        client = self._FakeClient({"root/prompts/notes.yaml": "fields:\n  x: y\n"})
+        with pytest.raises(ValueError, match="prompt"):
+            _load_prompt_template(client, "root", "notes", tmp_path, {})
+
+    def test_yaml_empty_fields_dict_raises(self, tmp_path):
+        client = self._FakeClient({"root/prompts/notes.yaml": "prompt: hi\nfields: {}\n"})
+        with pytest.raises(ValueError, match="fields"):
+            _load_prompt_template(client, "root", "notes", tmp_path, {})
+
+    def test_nothing_found_raises_file_not_found(self, tmp_path):
+        client = self._FakeClient({})
+        with pytest.raises(FileNotFoundError):
+            _load_prompt_template(client, "root", "missing", tmp_path, {})
+
+    def test_result_is_cached_on_second_call(self, tmp_path):
+        # .md is only found after probing (and missing) .yaml/.yml first, so
+        # the first lookup alone makes more than one download_sync call —
+        # what matters here is that the SECOND lookup makes none at all.
+        client = self._FakeClient({"root/prompts/summary.md": "hi"})
+        cache = {}
+        _load_prompt_template(client, "root", "summary", tmp_path, cache)
+        count_after_first = client.download_count
+        _load_prompt_template(client, "root", "summary", tmp_path, cache)
+        assert client.download_count == count_after_first

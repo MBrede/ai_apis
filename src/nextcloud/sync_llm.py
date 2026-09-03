@@ -353,25 +353,35 @@ def _scan_prompt_cells(
     return cells
 
 
-def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str, dict], tmp_dir: Path) -> None:
+def _build_prompt_tables(
+    client: Client, folder_path: str, remote_root: str, batch_rows: dict[str, dict], tmp_dir: Path
+) -> None:
     """Build one llm/results_table.xlsx for this folder's batch.csv/batch.xlsx,
-    one sheet per LLM model, columns are prompts.
+    one sheet per LLM model, columns are prompts (or `<prompt>:<field>` for
+    a structured/`.yaml` prompt — see `_load_prompt_template`).
 
     Batch-input usability feature: a customer who uploaded many files via a
     batch sheet gets one reviewable workbook instead of only scattered
     individual .md files (which still exist, unchanged) — each model's
     sheet has rows = transcript stems (STT-model suffix included when `stt:`
     was a list), columns = prompts, cells = that (stem, model, prompt)
-    combination's output text (blank if not processed yet). Fully rebuilt
-    from whatever's actually in llm/ right now (not incrementally appended)
-    whenever called — the caller in `main()` only calls this for folders
-    where a job actually uploaded something this run, so it's a consistent
-    snapshot without needless rework on no-op runs. Only applies to
-    batch-covered folders, not plain per-file YAML sidecars.
+    combination's output text (blank if not processed yet). A structured
+    prompt instead contributes one column per field, each cell the parsed
+    value for that field (the saved `.md` file is actually YAML for these —
+    see the main jobs loop). Fully rebuilt from whatever's actually in
+    llm/ right now (not incrementally appended) whenever called — the
+    caller in `main()` only calls this for folders where a job actually
+    uploaded something this run, so it's a consistent snapshot without
+    needless rework on no-op runs. Only applies to batch-covered folders,
+    not plain per-file YAML sidecars.
 
     Args:
         client: WebDAV client.
         folder_path: Remote folder that has the batch.csv/batch.xlsx.
+        remote_root: Top-level NEXTCLOUD_FOLDER entry this folder belongs to
+            (prompts live at `<remote_root>/prompts/` — see
+            `_load_prompt_template`), needed to know which prompts are
+            structured and their field lists.
         batch_rows: {stem: row_dict}, as returned by `_load_batch_rows`.
         tmp_dir: Local scratch directory for downloads/uploads.
     """
@@ -381,6 +391,19 @@ def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str,
         return
 
     from openpyxl import Workbook
+
+    # Load each distinct prompt's definition once, to know which are
+    # structured (have `fields:`) and their field lists/order.
+    prompt_cache: dict[str, dict] = {}
+    fields_by_prompt: dict[str, dict[str, str] | None] = {}
+    for prompt in cells:
+        try:
+            fields_by_prompt[prompt] = _load_prompt_template(client, remote_root, prompt, tmp_dir, prompt_cache)[
+                "fields"
+            ]
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error("Could not load prompt '%s' for results_table.xlsx: %s", prompt, exc)
+            fields_by_prompt[prompt] = None
 
     # Invert {prompt: {stem: {model: filename}}} -> {model: {stem: {prompt: filename}}}
     by_model: dict[str, dict[str, dict[str, str]]] = {}
@@ -394,19 +417,42 @@ def _build_prompt_tables(client: Client, folder_path: str, batch_rows: dict[str,
     for model in sorted(by_model):
         stems = by_model[model]
         prompts = sorted({prompt for row in stems.values() for prompt in row})
+        # Expand a structured prompt into one "<prompt>:<field>" column per
+        # field (in the order declared in fields:); a plain prompt stays a
+        # single "<prompt>" column, unchanged. Each column remembers which
+        # prompt (and which field within it, if structured) it came from.
+        columns: list[tuple[str, str, str | None]] = []  # (header, prompt, field_name_or_None)
+        for prompt in prompts:
+            fields = fields_by_prompt.get(prompt)
+            if fields:
+                columns.extend((f"{prompt}:{field}", prompt, field) for field in fields)
+            else:
+                columns.append((prompt, prompt, None))
+
         ws = wb.create_sheet(model[:31])
-        ws.append(["filename"] + prompts)
+        ws.append(["filename"] + [header for header, _, _ in columns])
         for stem in sorted(stems):
             row_values = [stem]
-            for prompt in prompts:
-                output_name = stems[stem].get(prompt)
-                text = ""
-                if output_name:
-                    try:
-                        text = _download_text(client, llm_dir + output_name, tmp_dir)
-                    except Exception as exc:
-                        logger.error("Failed to download %s for results_table.xlsx: %s", output_name, exc)
-                row_values.append(text)
+            # Cache one prompt's downloaded/parsed content across its
+            # several field-columns in this row, instead of re-downloading
+            # the same output file once per field.
+            row_cache: dict[str, str | dict] = {}
+            for _, prompt, _ in columns:
+                if prompt not in row_cache:
+                    output_name = stems[stem].get(prompt)
+                    row_cache[prompt] = ""
+                    if output_name:
+                        try:
+                            text = _download_text(client, llm_dir + output_name, tmp_dir)
+                            row_cache[prompt] = yaml.safe_load(text) if fields_by_prompt.get(prompt) else text
+                        except Exception as exc:
+                            logger.error("Failed to download %s for results_table.xlsx: %s", output_name, exc)
+            for _, prompt, field in columns:
+                content = row_cache[prompt]
+                if field is None:
+                    row_values.append(content if isinstance(content, str) else "")
+                else:
+                    row_values.append(content.get(field, "") if isinstance(content, dict) else "")
             ws.append(row_values)
 
     local_path = tmp_dir / "results_table.xlsx"
@@ -430,15 +476,20 @@ def _load_prompt_template(
     remote_root: str,
     prompt_name: str,
     tmp_dir: Path,
-    cache: dict[str, str],
-) -> str:
+    cache: dict[str, dict],
+) -> dict:
     """Load a prompt template, preferring the Nextcloud ``prompts/`` folder.
 
     Templates are edited by uploading a `.md` file to
     ``<remote_root>/prompts/<prompt_name>.md`` — no image rebuild or redeploy
-    needed. Falls back to the template bundled in the image (under the
-    script's local ``prompts/`` folder) only if the remote one is missing,
-    so a fresh deployment still has a working default. Results are cached
+    needed. A `.yaml`/`.yml` file instead (checked first) opts the prompt
+    into structured output: it must have a `prompt:` key (the template text,
+    same placeholders as a plain `.md`) and a `fields:` key (a
+    `{field_name: description}` mapping — one output field per entry, each
+    a plain string). Falls back to the `.md` template bundled in the image
+    (under the script's local ``prompts/`` folder) only if nothing remote
+    matches, so a fresh deployment still has a working default — bundled
+    defaults are always plain-text, never structured. Results are cached
     per run since many jobs typically share the same prompt.
 
     Args:
@@ -447,23 +498,44 @@ def _load_prompt_template(
             live at `<remote_root>/prompts/`) — with multiple NEXTCLOUD_FOLDER
             entries, each folder's own prompts/ is checked independently, so
             the cache key must include it (see `cache`).
-        prompt_name: Stem of a `.md` template file.
+        prompt_name: Stem of a `.md`/`.yaml`/`.yml` template file.
         tmp_dir: Local scratch directory for the temporary download.
         cache: Dict reused across calls within a single run, keyed
             `"<remote_root>:<prompt_name>"` — the same prompt name can
             resolve to a different template per folder.
 
     Returns:
-        Raw template text (not yet rendered with a transcript).
+        `{"template": str, "fields": dict[str, str] | None}` — `fields` is
+        `None` for a plain `.md` prompt (unstructured, unchanged behavior).
 
     Raises:
         FileNotFoundError: If no matching template exists remotely or locally.
+        ValueError: If a `.yaml`/`.yml` prompt is missing `prompt:` or `fields:`.
     """
     cache_key = f"{remote_root}:{prompt_name}"
     if cache_key in cache:
         return cache[cache_key]
 
-    remote_path = f"{remote_root.rstrip('/')}/{PROMPTS_SUBFOLDER}/{prompt_name}.md"
+    base = f"{remote_root.rstrip('/')}/{PROMPTS_SUBFOLDER}/{prompt_name}"
+    for ext in (".yaml", ".yml"):
+        try:
+            text = _download_text(client, base + ext, tmp_dir)
+        except RemoteResourceNotFound:
+            continue
+        data = yaml.safe_load(text) or {}
+        if "prompt" not in data:
+            raise ValueError(f"Prompt '{prompt_name}{ext}' is missing required 'prompt:' key.")
+        if "fields" not in data or not isinstance(data["fields"], dict) or not data["fields"]:
+            raise ValueError(
+                f"Prompt '{prompt_name}{ext}' is missing required non-empty 'fields:' mapping "
+                f"(a .yaml/.yml prompt always triggers structured output — use .md for plain text)."
+            )
+        logger.info("Loaded structured prompt '%s' from Nextcloud (%s).", prompt_name, remote_root)
+        result = {"template": data["prompt"], "fields": {str(k): str(v) for k, v in data["fields"].items()}}
+        cache[cache_key] = result
+        return result
+
+    remote_path = base + ".md"
     try:
         template = _download_text(client, remote_path, tmp_dir)
         logger.info("Loaded prompt '%s' from Nextcloud (%s).", prompt_name, remote_root)
@@ -471,14 +543,15 @@ def _load_prompt_template(
         local_path = LOCAL_PROMPTS_DIR / f"{prompt_name}.md"
         if not local_path.exists():
             raise FileNotFoundError(
-                f"Prompt '{prompt_name}' not found in Nextcloud ({remote_path}) "
-                f"or bundled defaults ({local_path})."
+                f"Prompt '{prompt_name}' not found in Nextcloud ({remote_path}, "
+                f"{base}.yaml, {base}.yml) or bundled defaults ({local_path})."
             )
         logger.info("Prompt '%s' not in Nextcloud, using bundled default.", prompt_name)
         template = local_path.read_text(encoding="utf-8")
 
-    cache[cache_key] = template
-    return template
+    result = {"template": template, "fields": None}
+    cache[cache_key] = result
+    return result
 
 
 def _render_prompt(template: str, transcript: str, context: str = "", extra_fields: dict[str, str] | None = None) -> str:
@@ -506,20 +579,54 @@ def _render_prompt(template: str, transcript: str, context: str = "", extra_fiel
     return rendered
 
 
-async def _call_llm(session: aiohttp.ClientSession, model: str, prompt: str) -> str | None:
+def _json_schema_for_fields(fields: dict[str, str]) -> dict:
+    """Build a JSON schema (vLLM/OpenAI `response_format: json_schema` shape)
+    from a prompt's `fields:` mapping — every field is a required string
+    property, described by its mapping value.
+
+    Args:
+        fields: `{field_name: description}`, from `_load_prompt_template`.
+
+    Returns:
+        A `response_format` payload value.
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "structured_output",
+            "schema": {
+                "type": "object",
+                "properties": {name: {"type": "string", "description": desc} for name, desc in fields.items()},
+                "required": list(fields.keys()),
+            },
+        },
+    }
+
+
+async def _call_llm(
+    session: aiohttp.ClientSession, model: str, prompt: str, fields: dict[str, str] | None = None
+) -> str | dict[str, str] | None:
     """Send a chat-completion request to the in-cluster KubeAI endpoint.
 
     Args:
         session: Shared aiohttp session.
         model: KubeAI model name.
         prompt: Fully rendered prompt text.
+        fields: When given (a structured/`.yaml` prompt — see
+            `_load_prompt_template`), requests structured JSON output
+            matching these fields via `response_format` and parses the
+            reply into a `{field_name: value}` dict instead of raw text.
 
     Returns:
-        The assistant's reply text, or None on failure.
+        The assistant's reply text (or parsed structured dict, if `fields`
+        was given), or `None` on failure — including a structured reply
+        that wasn't valid JSON, or didn't parse as an object.
     """
     llm_url = os.environ.get("LLM_URL", "http://kubeai.llm.svc.cluster.local/openai/v1")
     endpoint = f"{llm_url.rstrip('/')}/chat/completions"
     payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    if fields:
+        payload["response_format"] = _json_schema_for_fields(fields)
     headers = {"Authorization": "Bearer not-used"}
 
     try:
@@ -535,7 +642,18 @@ async def _call_llm(session: aiohttp.ClientSession, model: str, prompt: str) -> 
             # field, depending on vLLM's reasoning-parser config. Strip it.
             if "</think>" in content:
                 content = content.rsplit("</think>", 1)[1]
-            return content.strip()
+            content = content.strip()
+            if not fields:
+                return content
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                logger.error("Structured output from '%s' was not valid JSON: %s", model, content[:300])
+                return None
+            if not isinstance(parsed, dict):
+                logger.error("Structured output from '%s' was not a JSON object: %s", model, content[:300])
+                return None
+            return {name: str(parsed.get(name, "")) for name in fields}
     except Exception as exc:
         # asyncio.TimeoutError (and a few other exceptions) have an empty
         # str() — include the type name so timeouts are distinguishable
@@ -1422,7 +1540,7 @@ async def main() -> None:
             jobs.sort(key=lambda j: j["model"])
             logger.info("Processing order (grouped by model): %s", [j["model"] for j in jobs][:50])
 
-            prompt_cache: dict[str, str] = {}
+            prompt_cache: dict[str, dict] = {}
             timeout = aiohttp.ClientTimeout(total=int(os.environ.get("LLM_TIMEOUT", "900")))
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # Prompts are prepared up front (webdav downloads are fast,
@@ -1442,22 +1560,24 @@ async def main() -> None:
                         continue
 
                     try:
-                        template = _load_prompt_template(
+                        loaded = _load_prompt_template(
                             client, job["remote_root"], job["prompt"], tmp_dir, prompt_cache
                         )
-                    except FileNotFoundError as exc:
+                    except (FileNotFoundError, ValueError) as exc:
                         logger.error("%s Skipping %s.", exc, job["transcript_path"])
                         continue
-                    prompt = _render_prompt(template, transcript, job["context"], job["extra_fields"])
-                    prepared.append((job, prompt))
+                    prompt = _render_prompt(loaded["template"], transcript, job["context"], job["extra_fields"])
+                    prepared.append((job, prompt, loaded["fields"]))
 
                 semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
 
-                async def _run_call(job: dict, prompt: str) -> tuple[dict, str | None]:
+                async def _run_call(
+                    job: dict, prompt: str, fields: dict[str, str] | None
+                ) -> tuple[dict, str | dict[str, str] | None]:
                     async with semaphore:
-                        return job, await _call_llm(session, job["model"], prompt)
+                        return job, await _call_llm(session, job["model"], prompt, fields)
 
-                tasks = [asyncio.ensure_future(_run_call(job, prompt)) for job, prompt in prepared]
+                tasks = [asyncio.ensure_future(_run_call(job, prompt, fields)) for job, prompt, fields in prepared]
                 for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Processing"):
                     job, answer = await coro
                     if answer is None:
@@ -1468,8 +1588,16 @@ async def main() -> None:
                     except RemoteResourceNotFound:
                         client.mkdir(job["llm_dir"])
 
+                    # Structured output (from a .yaml prompt) is a dict —
+                    # save as YAML so it round-trips losslessly when
+                    # _build_prompt_tables re-downloads and re-parses it
+                    # later. Filename/extension stay .md either way (skip-
+                    # tracking matches on the exact name, not content-type).
+                    content = answer if isinstance(answer, str) else yaml.safe_dump(
+                        answer, allow_unicode=True, sort_keys=False
+                    )
                     local_out = tmp_dir / job["output_name"]
-                    local_out.write_text(answer, encoding="utf-8")
+                    local_out.write_text(content, encoding="utf-8")
                     remote_out = job["llm_dir"] + job["output_name"]
                     try:
                         client.upload_sync(local_path=str(local_out), remote_path=remote_out)
@@ -1487,7 +1615,7 @@ async def main() -> None:
         for folder_path, rows in batch_folders.items():
             llm_dir = folder_path.rstrip("/") + f"/{LLM_SUBFOLDER}/"
             if llm_dir in updated_llm_dirs:
-                _build_prompt_tables(client, folder_path, rows, tmp_dir)
+                _build_prompt_tables(client, folder_path, folder_roots[folder_path], rows, tmp_dir)
 
         # Judge pass — independent of the jobs loop above (judges may have
         # work even on a run with zero new LLM jobs, e.g. outputs from a

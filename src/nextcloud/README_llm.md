@@ -258,6 +258,52 @@ bundled today.
 |---|---|
 | `summary` | **Default.** Plain-language summary: topics, decisions, action items, per-speaker points. |
 
+### Structured output (`.yaml`/`.yml` prompts)
+
+A prompt can instead be a `<name>.yaml` (or `.yml`) file — the extension
+alone is what opts it into **structured output**: the LLM is asked (via the
+model's `response_format: json_schema` support) to return one value per
+declared field, instead of one free-text blob.
+
+```yaml
+# prompts/meeting_notes.yaml
+prompt: |
+  Extract the key points from this meeting transcript.
+
+  Transcript:
+  {transcript}
+fields:
+  decisions: "Bullet list of concrete decisions made, if any."
+  blockers: "Bullet list of open blockers or unresolved questions."
+  next_steps: "Bullet list of agreed next steps, with owner if mentioned."
+```
+
+- `prompt:` — the template text, same placeholders (`{transcript}`,
+  `{context}`, any extra sidecar field) and substitution rules as a plain
+  `.md` prompt.
+- `fields:` — **required** for a `.yaml`/`.yml` prompt (a `.yaml` file with
+  no `fields:`, or an empty one, is a configuration error, not a plain
+  prompt — use `.md` for plain text). Each key is a field name, each value
+  a plain-language description of what that field should contain — every
+  field is currently a required string in the generated schema.
+
+**Output**: `llm/<transcript_stem>_<model>_meeting_notes.md` is written for
+a structured prompt exactly like a plain one (same filename/skip-tracking
+rules) — the file's *content* is YAML (one line per field) instead of free
+text, so `results_table.xlsx` can re-parse it losslessly on a later run.
+
+**`results_table.xlsx`**: a structured prompt contributes one column per
+field instead of one column for the whole prompt, named
+`<prompt_name>:<field_name>` (e.g. `meeting_notes:decisions`,
+`meeting_notes:blockers`, `meeting_notes:next_steps`) — each cell is that
+field's parsed value. A plain `.md` prompt's column is unchanged
+(`<prompt_name>`, the whole free-text output).
+
+If the model returns something that isn't valid JSON matching the schema,
+that cell is logged and skipped (same graceful-degradation discipline as
+everything else in this pipeline) — it isn't saved, so a good response from
+that model still gets skip-tracked as "not yet processed" and retried next run.
+
 ## Judges (LLM-as-judge)
 
 Automated scored review on top of the batch-file result tables above — a
