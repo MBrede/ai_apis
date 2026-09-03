@@ -653,7 +653,11 @@ async def _call_llm(
             if not isinstance(parsed, dict):
                 logger.error("Structured output from '%s' was not a JSON object: %s", model, content[:300])
                 return None
-            return {name: str(parsed.get(name, "")) for name in fields}
+            # Found live 2026-09-03: glm-4-7-flash sometimes returns JSON
+            # null for a field with nothing to report, despite the schema
+            # declaring it a required string — str(None) would otherwise
+            # save the literal text "None" instead of leaving it blank.
+            return {name: "" if parsed.get(name) is None else str(parsed.get(name)) for name in fields}
     except Exception as exc:
         # asyncio.TimeoutError (and a few other exceptions) have an empty
         # str() — include the type name so timeouts are distinguishable
