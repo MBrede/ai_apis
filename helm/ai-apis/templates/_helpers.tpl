@@ -90,6 +90,35 @@ nvidia.com/gpu.sharing-strategy: time-slicing
 {{- end }}
 
 {{/*
+Node selector for whisper backends only — same GPU requirement as
+ai-apis.gpuNodeSelector but WITHOUT requiring the time-slicing label.
+Found live 2026-09-03: the "small" research-shared GPU pool (k8-gpu-2/4)
+doesn't carry nvidia.com/gpu.sharing-strategy at all, so the stricter
+selector above would silently exclude them. Paired with
+ai-apis.researchGpuToleration below so whisper can actually schedule
+there once this selector allows it.
+*/}}
+{{- define "ai-apis.whisperNodeSelector" -}}
+nvidia.com/gpu.present: "true"
+{{- end }}
+
+{{/*
+Toleration letting whisper additionally schedule onto the small
+research-shared GPU pool (k8-gpu-2/4, tainted role=research:NoSchedule) —
+spreads load off k8-gpu-1 to reduce contention with other GPU workloads
+there (see langchain_ecosystem_setup.md's indexer troubleshooting section
+for a prior instance of this same contention pattern). Deliberately does
+NOT tolerate gpu-tier=large (k8-gpu-3/5, the "large" research pool) — only
+the small pool is being opened up here.
+*/}}
+{{- define "ai-apis.researchGpuToleration" -}}
+- key: role
+  operator: Equal
+  value: research
+  effect: NoSchedule
+{{- end }}
+
+{{/*
 Construct the MongoDB connection URL.
 If .Values.global.mongodbUrl is non-empty that value is returned unchanged.
 Otherwise the URL is built from the mongodb sub-values and the release name.

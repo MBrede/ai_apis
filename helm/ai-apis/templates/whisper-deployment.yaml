@@ -27,7 +27,9 @@ spec:
       {{- include "ai-apis.imagePullSecrets" . | nindent 6 }}
       terminationGracePeriodSeconds: 3600
       nodeSelector:
-        {{- include "ai-apis.gpuNodeSelector" . | nindent 8 }}
+        {{- include "ai-apis.whisperNodeSelector" . | nindent 8 }}
+      tolerations:
+        {{- include "ai-apis.researchGpuToleration" . | nindent 8 }}
       containers:
         - name: whisper
           image: {{ include "ai-apis.image" (dict "root" . "imageName" .Values.whisper.image) }}
