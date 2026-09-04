@@ -129,6 +129,13 @@ file per row:
   one file without touching the batch file.
 - A file with neither a sidecar nor a batch row is untouched by this
   section — plain default transcription only (see "How it works" above).
+- **A batch row with a blank `stt` cell skips transcription entirely** —
+  this is different from a file with no row at all (which still gets the
+  default WHISPER_MODEL transcription). Use a blank `stt` when the
+  transcript already exists (e.g. you copied `interview_01.mp3` and its
+  `transcriptions/interview_01.txt` in from another folder just to run a
+  different `llm`/`prompt` combination against it) and you don't want the
+  audio needlessly re-transcribed on every cron run.
 - Any OTHER column beyond `filename`/`stt`/`llm`/`prompt`/`context` (e.g. a
   `ground_truth` column) is passed through per-row too, available as a
   `{field_name}` placeholder in prompt AND judge templates — see "Arbitrary

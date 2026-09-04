@@ -20,6 +20,11 @@ folder that has no `<stem>.yaml` of its own — a customer-facing batch
 alternative to hand-authoring one YAML per file. A file's own sidecar
 always wins over a matching batch row.
 
+A blank `stt` cell in a batch row (as opposed to no row at all) means the
+transcript already exists — e.g. it was copied in from elsewhere so this
+folder can run a different llm/prompt combination against it — so
+transcription is skipped for that file entirely instead of defaulting.
+
 All configuration is read from environment variables (see README_cron.md).
 
 This module is deliberately just the scan/download/transcribe/upload
@@ -90,11 +95,16 @@ def _collect_new_files(client: Client, remote_roots: list[str], tmp_dir: Path) -
     """Recursively find audio/video work items that still need transcription.
 
     Each returned item is one (file, STT model) pair. A file with no sidecar
-    and no matching batch.csv/batch.xlsx row, or a sidecar/row with no
-    `stt:`/`stt` field, yields exactly one item with `stt_model=None` —
-    today's behavior: single WHISPER_MODEL-env-default transcription,
-    unsuffixed `<stem>.{txt,srt}` output, skipped if `<stem>` already has a
-    transcript. A file with `stt: [m1, m2, ...]` (own sidecar, or a batch
+    and no matching batch.csv/batch.xlsx row, or a per-file sidecar with no
+    `stt:` field, yields exactly one item with `stt_model=None` — today's
+    behavior: single WHISPER_MODEL-env-default transcription, unsuffixed
+    `<stem>.{txt,srt}` output, skipped if `<stem>` already has a transcript.
+    A batch.csv/xlsx row with a blank `stt` cell is different: it means the
+    transcript already exists (e.g. copied in from elsewhere so this folder
+    can run a different llm/prompt combination) and yields NO work item —
+    transcription is skipped entirely rather than defaulting, so the file
+    isn't needlessly re-transcribed every run. A file with `stt: [m1, m2, ...]`
+    (own sidecar, or a batch
     row if it has no sidecar of its own — see `_load_batch_rows`) yields one
     item per listed model, each independently skippable via its own
     `<stem>_<model>.{txt,srt}` output.
@@ -140,6 +150,7 @@ def _collect_new_files(client: Client, remote_roots: list[str], tmp_dir: Path) -
                 stem = Path(f["path"]).stem
                 sidecar_path = sidecars_by_stem.get(stem)
                 stt_models: list[str] = []
+                matched_batch_row = False
                 if sidecar_path:
                     try:
                         text = _download_text(client, sidecar_path, tmp_dir)
@@ -148,10 +159,19 @@ def _collect_new_files(client: Client, remote_roots: list[str], tmp_dir: Path) -
                         logger.error("Failed to read sidecar %s: %s", sidecar_path, exc)
                 elif stem in batch_rows:
                     # No per-file sidecar — fall back to this folder's batch.csv/batch.xlsx row.
+                    matched_batch_row = True
                     stt_models = _stt_models_from_dict(batch_rows[stem])
 
                 if not stt_models:
-                    # No sidecar, or sidecar has no `stt:` — today's default behavior.
+                    if matched_batch_row:
+                        # Row exists but `stt` is blank — the user is telling
+                        # us the transcript already exists (e.g. copied in
+                        # from elsewhere for a different llm/prompt run), not
+                        # that they forgot to fill it in. Skip transcription
+                        # rather than defaulting, so the audio file doesn't
+                        # get needlessly re-transcribed every run.
+                        continue
+                    # No sidecar/batch row at all — today's default behavior.
                     if stem not in existing_stems:
                         work_items.append({"file": f, "stt_model": None})
                 else:
