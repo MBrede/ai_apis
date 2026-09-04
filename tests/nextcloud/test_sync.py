@@ -4,10 +4,7 @@ Tests for sync.py's sidecar-driven multi-model STT and multi-folder helpers.
 
 import openpyxl
 
-from src.nextcloud.sync import (
-    _backend_for_stt_model,
-    _detect_possible_truncation,
-    _make_webdav_client,
+from src.nextcloud.batch import (
     _normalize_list,
     _parse_sidecar_stt,
     _read_batch_csv,
@@ -15,6 +12,8 @@ from src.nextcloud.sync import (
     _row_to_sidecar_dict,
     _stt_models_from_dict,
 )
+from src.nextcloud.transcription import _backend_for_stt_model, _detect_possible_truncation
+from src.nextcloud.webdav_utils import _make_webdav_client
 
 
 class TestNormalizeList:

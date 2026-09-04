@@ -5,13 +5,10 @@ and multi-folder prompt-cache namespacing.
 
 import pytest
 
-from src.nextcloud.sync_llm import (
-    DEFAULT_PROMPT,
-    _json_schema_for_fields,
-    _load_prompt_template,
-    _parse_sidecar,
-    _render_prompt,
-)
+from src.nextcloud.batch import _parse_sidecar
+from src.nextcloud.constants import DEFAULT_PROMPT
+from src.nextcloud.llm_client import _json_schema_for_fields
+from src.nextcloud.prompts import _load_prompt_template, _render_prompt
 
 
 class TestParseSidecar:

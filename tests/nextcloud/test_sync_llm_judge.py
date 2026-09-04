@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from src.nextcloud.sync_llm import (
+from src.nextcloud.judges import (
     _batch_row_for_transcript_stem,
     _build_judge_template,
     _locate_score_token,
@@ -20,11 +20,11 @@ from src.nextcloud.sync_llm import (
     _parse_judge_yaml,
     _read_judge_scores_xlsx,
     _render_judge_prompt,
-    _scan_prompt_cells,
     _score_from_label,
     _score_from_logprobs,
     _write_judge_scores_xlsx,
 )
+from src.nextcloud.results_table import _scan_prompt_cells
 
 
 class TestParseJudgeScale:
