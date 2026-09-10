@@ -95,7 +95,9 @@ async def _proxy_transcribe_and_diarize(target_url: str, file_path: str, params:
             ) as resp:
                 body = await resp.read()
                 if not (200 <= resp.status < 400):
-                    raise HTTPException(status_code=resp.status, detail=body.decode(errors="replace"))
+                    raise HTTPException(
+                        status_code=resp.status, detail=body.decode(errors="replace")
+                    )
                 return json.loads(body)
 
 
@@ -127,12 +129,15 @@ def filter_transcription_chunks(
     if max_words_per_second is not None:
         before = len(result)
         result = [
-            c for c in result
+            c
+            for c in result
             if _words_per_second(c["TRANSCRIPTION"], c["DURATION"]) <= max_words_per_second
         ]
         logger.info(
             "Word-rate filter (max %.1f WPS): removed %d/%d chunks",
-            max_words_per_second, before - len(result), before,
+            max_words_per_second,
+            before - len(result),
+            before,
         )
 
     if top_n_languages is not None and result:
@@ -142,7 +147,10 @@ def filter_transcription_chunks(
         result = [c for c in result if c["LANGUAGE"] in allowed]
         logger.info(
             "Language filter (top %d: %s): removed %d/%d chunks",
-            top_n_languages, allowed, before - len(result), before,
+            top_n_languages,
+            allowed,
+            before - len(result),
+            before,
         )
 
     return result
@@ -153,6 +161,25 @@ app = create_app(
     description="Speech-to-text with speaker diarization.",
 )
 router = APIRouter()
+
+# Consecutive-failure tracking for stuck CUDA contexts. Found live 2026-09-10:
+# after enough failed model-load/inference attempts (e.g. from an unrelated
+# GPU-memory squeeze elsewhere on the shared node), a long-lived process's own
+# CUDA allocator can end up wedged — it keeps failing with "out of memory"
+# even once real VRAM is free again, and only a fresh process (pod restart)
+# clears it. /health previously only checked that in-memory buffer objects
+# existed, never that CUDA itself was actually usable, so a wedged pod could
+# sit "healthy" for hours while every real request failed. Reset to 0 on any
+# successful transcription; once _CUDA_FAILURE_THRESHOLD consecutive CUDA
+# errors accrue, /health reports unhealthy so the liveness probe restarts us.
+_consecutive_cuda_failures = 0
+_CUDA_FAILURE_THRESHOLD = 3
+
+
+def _is_cuda_error(exc: Exception) -> bool:
+    """True if `exc` looks like a CUDA/GPU-memory failure, not an ordinary bug."""
+    text = str(exc).lower()
+    return "cuda" in text or "out of memory" in text
 
 
 def diarize_audio(
@@ -311,6 +338,8 @@ async def transcribe_diarize(
         file_contents = await file.read()
         f.write(file_contents)
 
+    global _consecutive_cuda_failures
+
     try:
         if backend in BACKEND_REGISTRY and backend in LOCAL_BACKENDS:
             buf = BACKEND_REGISTRY[backend]
@@ -328,9 +357,12 @@ async def transcribe_diarize(
                 align=align,
                 initial_prompt=filler_prompt if backend == "whisperx" else None,
             )
+            _consecutive_cuda_failures = 0
             audio_duration = await asyncio.to_thread(_audio_duration_seconds, local_path)
             os.remove(local_path)
-            answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
+            answer = filter_transcription_chunks(
+                chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit
+            )
             return {
                 "answer": answer,
                 "backend": backend,
@@ -354,9 +386,12 @@ async def transcribe_diarize(
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )
+            _consecutive_cuda_failures = 0
             audio_duration = await asyncio.to_thread(_audio_duration_seconds, local_path)
             os.remove(local_path)
-            answer = filter_transcription_chunks(chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit)
+            answer = filter_transcription_chunks(
+                chunks, max_words_per_second=wps_limit, top_n_languages=lang_limit
+            )
             return {
                 "answer": answer,
                 "backend": backend,
@@ -382,7 +417,9 @@ async def transcribe_diarize(
             if top_n_languages is not None:
                 proxy_params["top_n_languages"] = top_n_languages
 
-            result = await _proxy_transcribe_and_diarize(PROXY_URLS[backend], local_path, proxy_params)
+            result = await _proxy_transcribe_and_diarize(
+                PROXY_URLS[backend], local_path, proxy_params
+            )
             os.remove(local_path)
             return result
 
@@ -395,6 +432,12 @@ async def transcribe_diarize(
 
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeError as e:
+        if _is_cuda_error(e):
+            _consecutive_cuda_failures += 1
+            logger.error("CUDA/GPU error (%d consecutive): %s", _consecutive_cuda_failures, e)
+            raise HTTPException(status_code=503, detail=f"GPU error, service degraded: {e}")
+        raise
 
 
 @router.get("/buffer_status/")
@@ -406,7 +449,11 @@ async def get_buffer_status(api_key: str = Depends(verify_api_key)):
         status["whisper"] = whisper_buffer.get_status()
         status["diarization"] = diarization_buffer.get_status()
     status.update(
-        {name.replace("-", "_"): buf.get_status() for name, buf in BACKEND_REGISTRY.items() if name in LOCAL_BACKENDS}
+        {
+            name.replace("-", "_"): buf.get_status()
+            for name, buf in BACKEND_REGISTRY.items()
+            if name in LOCAL_BACKENDS
+        }
     )
     status["proxied_backends"] = PROXY_URLS
     return status
@@ -435,7 +482,8 @@ async def health_check():
         )
 
         healthy = {name: status is not None for name, status in statuses.items()}
-        is_healthy = all(healthy.values())
+        cuda_wedged = _consecutive_cuda_failures >= _CUDA_FAILURE_THRESHOLD
+        is_healthy = all(healthy.values()) and not cuda_wedged
 
         response_data = {
             "status": "healthy" if is_healthy else "unhealthy",
@@ -445,6 +493,7 @@ async def health_check():
                 f"{name}_model_loaded": status.get("is_loaded", False) if status else False
                 for name, status in statuses.items()
             },
+            "consecutive_cuda_failures": _consecutive_cuda_failures,
             "note": "Models will load on first request",
         }
 
