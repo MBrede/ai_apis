@@ -9,6 +9,11 @@ metadata:
   annotations:
     helm.sh/chart: {{ include "ai-apis.chart" . }}
 spec:
+  # Recreate, not RollingUpdate: the new pod would need the same RWO PVCs and
+  # (on a shared/time-sliced GPU node) the same GPU slot as the old one, so a
+  # rolling update can deadlock with both pods waiting on each other.
+  strategy:
+    type: Recreate
   # Only one replica is supported because all three PVCs are ReadWriteOnce.
   # When keda.enabled, replicas are managed by the HTTPScaledObject (can be 0).
   {{- if not .Values.keda.enabled }}
